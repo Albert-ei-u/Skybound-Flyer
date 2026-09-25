@@ -23,6 +23,7 @@ from ursina import (
 
 from game.config import AIRPORTS, GROUND_Y, PLANE_GROUND_Y, RUNWAY_Z
 from game.city import CityBuilder
+from game.landing_sites import LandingSiteBuilder, drone_pad_position
 from game.roads import RoadNetwork
 
 CITY_OBSTACLES = []
@@ -272,8 +273,8 @@ class World:
             color=color.rgb(58, 115, 62), texture='white_cube',
             texture_scale=(300, 300), collider='box',
         )
-        for name, (x, z) in AIRPORTS.items():
-            self._build_airport(name, x, z)
+        self.landing_sites = LandingSiteBuilder(AIRPORTS)
+        self.landing_sites.build()
 
         self._build_roads()
 
@@ -296,13 +297,8 @@ class World:
                 aircraft.update(dt)
 
     def _build_airport(self, name, x, z):
-        Entity(model='cube', scale=(42, 0.2, 260), position=(x, 0.05, z),
-               color=color.rgb(48, 50, 56))
-        for mark_z in range(z - 115, z + 116, 24):
-            Entity(model='cube', scale=(1.4, 0.08, 10),
-                   position=(x, 0.18, mark_z), color=color.white)
-        Entity(model='cube', scale=(70, 7, 35), position=(x + 62, 3.5, z + 20),
-               color=color.rgb(180, 190, 205))
+        # Compatibility wrapper for older callers.
+        LandingSiteBuilder({name: (x, z)}).build()
 
     def _build_roads(self):
         RoadNetwork().build()
@@ -393,10 +389,13 @@ class MissionManager:
 
         if self.state == 'LANDING':
             airport_x, airport_z = AIRPORTS[self.landing_airport]
+            pad_x, pad_z = drone_pad_position(AIRPORTS, self.landing_airport)
             near_runway = (abs(position.x - airport_x) < 32 and
                            abs(position.z - airport_z) < 125)
+            near_drone_pad = (abs(position.x - pad_x) < 16 and
+                              abs(position.z - pad_z) < 16)
             stable_landing = position.y <= 8 and self.plane.speed < 45
-            if near_runway and stable_landing:
+            if (near_runway or near_drone_pad) and stable_landing:
                 self.score += 300
                 if self.level == len(self.LEVELS) - 1:
                     self.state = 'WON'
@@ -513,7 +512,7 @@ class Radar:
             self.target_dot.enabled = True
             self.target_dot.position = self._to_ui(gate.position.x, gate.position.z)
         elif mission.state == 'LANDING':
-            airport_x, airport_z = AIRPORTS[mission.landing_airport]
+            airport_x, airport_z = drone_pad_position(AIRPORTS, mission.landing_airport)
             self.target_dot.enabled = True
             self.target_dot.position = self._to_ui(airport_x, airport_z)
         else:

@@ -11,8 +11,11 @@ scoring are kept separate so each can be expanded without rewriting the
 flight loop.
 
 Current extracted systems include `game/config.py`, `game/roads.py`, and
-`game/city.py`. The city builder returns collision bounds to the gameplay
-systems instead of coupling building rendering to mission logic.
+`game/city.py`. Landing infrastructure is separated into
+`game/landing_sites.py`; airports are treated as reusable aircraft and drone
+landing sites instead of being hard-coded into missions. The city builder
+returns collision bounds to gameplay systems instead of coupling building
+rendering to mission logic.
 
 Run the configuration tests with:
 
