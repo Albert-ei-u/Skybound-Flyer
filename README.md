@@ -2,6 +2,24 @@
 
 Skybound is a Python 3D flight simulator built with Ursina. It includes a procedural city, airports, missions, checkpoints, scoring, landing objectives, joystick input, audio, and level progression.
 
+## Architecture
+
+The project is organized as independent systems. `main.py` owns application
+startup and coordinates the systems; reusable configuration and gameplay
+systems live under `game/`. World generation, input, audio, missions, and
+scoring are kept separate so each can be expanded without rewriting the
+flight loop.
+
+Current extracted systems include `game/config.py`, `game/roads.py`, and
+`game/city.py`. The city builder returns collision bounds to the gameplay
+systems instead of coupling building rendering to mission logic.
+
+Run the configuration tests with:
+
+```powershell
+python -m unittest discover -s tests
+```
+
 ## Installation
 
 ```powershell
@@ -74,6 +92,21 @@ LGA -> checkpoints -> JFK landing
 After all checkpoints are cleared and the aircraft lands at the destination airport, the next level starts automatically. Later levels use longer routes and moving aircraft traffic.
 
 Checkpoint points are awarded for clearing the gate, altitude accuracy, speed, and remaining time. A successful destination landing awards an additional bonus.
+
+## Roadmap: drone evolution
+
+The current aircraft is a temporary flight prototype. The planned vehicle
+will become an original drone system as development continues:
+
+- Replace the aircraft model with a detailed drone model
+- Add drone-style hover, vertical movement, yaw, pitch, and roll physics
+- Add first-person drone camera and stabilized chase camera modes
+- Add drone delivery, inspection, tracking, and emergency missions
+- Add payload weight, battery/energy, signal range, and return-to-base systems
+- Add assisted flight and optional manual joystick control
+- Add landing pads, rooftops, helipads, and restricted airspace
+- Add civilian and emergency drone traffic to the city
+- Add drone-specific scoring for precision, battery use, safety, and time
 
 ## Audio
 

@@ -21,15 +21,10 @@ from ursina import (
     Vec3, held_keys, application, time, lerp, Audio, Sequence, Func,
 )
 
+from game.config import AIRPORTS, GROUND_Y, PLANE_GROUND_Y, RUNWAY_Z
+from game.city import CityBuilder
+from game.roads import RoadNetwork
 
-RUNWAY_Z = -100
-GROUND_Y = 0
-PLANE_GROUND_Y = 2.4
-AIRPORTS = {
-    'LGA': (-650, 100),
-    'JFK': (650, 900),
-    'EWR': (-900, 600),
-}
 CITY_OBSTACLES = []
 
 
@@ -280,43 +275,9 @@ class World:
         for name, (x, z) in AIRPORTS.items():
             self._build_airport(name, x, z)
 
-        # NYC-inspired Manhattan skyline: dense towers, brownstone blocks,
-        # and a few distinctive landmark silhouettes.
-        for x in range(-720, 721, 60):
-            for z in range(-260, 1261, 70):
-                clear_approach = any(
-                    abs(x - airport_x) < 75 and abs(z - airport_z) < 270
-                    for airport_x, airport_z in AIRPORTS.values()
-                )
-                if abs(x) < 25 or clear_approach:
-                    continue
-                height = 12 + ((abs(x) * 3 + z * 7) % 58)
-                tint = color.rgb(72 + height, 88 + height // 2, 112 + height)
-                Entity(model='cube', scale=(21, height, 23),
-                       position=(x, height / 2, z), color=tint)
-                CITY_OBSTACLES.append((x, z, 10.5, 11.5, height))
+        self._build_roads()
 
-        # Low-rise residential neighborhoods around the skyline.
-        for x in range(-980, 981, 75):
-            for z in range(-350, 1401, 100):
-                clear_approach = any(
-                    abs(x - airport_x) < 90 and abs(z - airport_z) < 300
-                    for airport_x, airport_z in AIRPORTS.values()
-                )
-                if ((abs(x) < 760 and -260 < z < 1260) or clear_approach):
-                    continue
-                height = 7 + ((x * x + z) % 8)
-                Entity(model='cube', scale=(26, height, 30),
-                       position=(x, height / 2, z),
-                       color=color.rgb(130, 92, 72))
-                CITY_OBSTACLES.append((x, z, 13, 15, height))
-
-        # Stylized Empire-State-like landmark.
-        Entity(model='cube', scale=(26, 145, 26), position=(0, 72.5, 420),
-               color=color.rgb(90, 95, 112))
-        Entity(model='cube', scale=(5, 35, 5), position=(0, 162, 420),
-               color=color.rgb(75, 80, 95))
-        CITY_OBSTACLES.append((0, 420, 13, 13, 145))
+        CITY_OBSTACLES.extend(CityBuilder(AIRPORTS).build())
         self.traffic = [
             TrafficPlane(-520, -250, 0.0),
             TrafficPlane(420, 120, 2.0),
@@ -342,6 +303,9 @@ class World:
                    position=(x, 0.18, mark_z), color=color.white)
         Entity(model='cube', scale=(70, 7, 35), position=(x + 62, 3.5, z + 20),
                color=color.rgb(180, 190, 205))
+
+    def _build_roads(self):
+        RoadNetwork().build()
 
 
 class Checkpoint:
