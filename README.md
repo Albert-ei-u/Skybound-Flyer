@@ -1,6 +1,6 @@
 # Skybound Flight Simulator
 
-Skybound is a Python 3D flight simulator built with Ursina. It includes a procedural city, airports, missions, checkpoints, scoring, landing objectives, joystick input, audio, and level progression.
+Skybound is a Python 3D drone familiarisation simulator built with Ursina. It includes a procedural development city, landing sites, missions, checkpoints, scoring, joystick input, audio, and level progression.
 
 ## Architecture
 
@@ -10,12 +10,28 @@ systems live under `game/`. World generation, input, audio, missions, and
 scoring are kept separate so each can be expanded without rewriting the
 flight loop.
 
-Current extracted systems include `game/config.py`, `game/roads.py`, and
-`game/city.py`. Landing infrastructure is separated into
-`game/landing_sites.py`; airports are treated as reusable aircraft and drone
+Current extracted systems include `game/config.py`, `game/roads.py`,
+`game/city.py`, `game/traffic.py`, and `game/missions.py`. Landing infrastructure is separated into
+`game/landing_sites.py`; airports are treated as reusable drone
 landing sites instead of being hard-coded into missions. The city builder
 returns collision bounds to gameplay systems instead of coupling building
-rendering to mission logic.
+rendering to mission logic. `TrafficManager` owns non-player aircraft and
+level-based activation, leaving room for future air-traffic routes, separation
+rules, and drone collision policies.
+Mission routes, checkpoint scoring, landing validation, and level progression
+are coordinated by `MissionSystem`, keeping gameplay rules separate from the
+rendering and flight-control loop.
+
+Buildings are generated at the centres of road blocks rather than on the road
+grid. The HUD identifies the regional city grid and indicates when air traffic
+will activate in Level 2. The world is divided into named districts such as
+Harbor District, Central City, Midtown, Uptown, and Airport Corridor; district
+identity and visual building variation are derived from world coordinates.
+Each district now has a recognizable landmark and the road network includes
+sparse street furniture to improve scale and navigation from the air.
+The playable bounds now cover a regional 6000 x 5400 world with a dense core
+and a lower-density outer ring. A large collidable terrain foundation keeps
+the drone above the ground surface and prevents it from falling below roads.
 
 Run the configuration tests with:
 
@@ -92,16 +108,20 @@ Level 1 starts at LGA:
 LGA -> checkpoints -> JFK landing
 ```
 
-After all checkpoints are cleared and the aircraft lands at the destination airport, the next level starts automatically. Later levels use longer routes and moving aircraft traffic.
+After all checkpoints are cleared and the drone lands at the destination site, the next level starts automatically. Later levels use longer routes and moving traffic.
 
 Checkpoint points are awarded for clearing the gate, altitude accuracy, speed, and remaining time. A successful destination landing awards an additional bonus.
 
-## Roadmap: drone evolution
+## Roadmap: training product
 
-The current aircraft is a temporary flight prototype. The planned vehicle
-will become an original drone system as development continues:
+The player vehicle is now an original quadcopter drone. The current city
+geometry is a procedural development fallback, not a survey-accurate map.
+Production scenarios will load permitted real-city road and building data,
+such as an OpenStreetMap/GeoJSON export, with a documented local coordinate
+origin.
 
-- Replace the aircraft model with a detailed drone model
+- Import a real city dataset with road, building, and landing-zone metadata
+- Replace fallback roads and buildings with imported geometry
 - Add drone-style hover, vertical movement, yaw, pitch, and roll physics
 - Add first-person drone camera and stabilized chase camera modes
 - Add drone delivery, inspection, tracking, and emergency missions

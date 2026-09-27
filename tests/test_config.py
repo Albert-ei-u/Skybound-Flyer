@@ -15,6 +15,10 @@ class ConfigurationTests(unittest.TestCase):
     def test_serial_protocol(self):
         self.assertEqual(SERIAL_BAUDRATE, 115200)
 
+    def test_city_bounds_are_regional(self):
+        self.assertGreaterEqual(CITY_BOUNDS['max_x'] - CITY_BOUNDS['min_x'], 5000)
+        self.assertGreaterEqual(CITY_BOUNDS['max_z'] - CITY_BOUNDS['min_z'], 5000)
+
 
 if __name__ == '__main__':
     unittest.main()

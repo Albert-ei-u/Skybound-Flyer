@@ -12,10 +12,10 @@ AIRPORTS = {
 }
 
 CITY_BOUNDS = {
-    'min_x': -1400,
-    'max_x': 1400,
-    'min_z': -600,
-    'max_z': 1800,
+    'min_x': -3000,
+    'max_x': 3000,
+    'min_z': -1800,
+    'max_z': 3600,
 }
 
 SERIAL_BAUDRATE = 115200

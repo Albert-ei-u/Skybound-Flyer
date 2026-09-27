@@ -3,6 +3,33 @@
 from ursina import Entity, color
 
 
+DISTRICTS = (
+    ('Harbor District', -1170, -210, -300, 500),
+    ('Old Town', -1170, -210, 500, 1610),
+    ('Central City', -210, 510, -300, 700),
+    ('Midtown', -210, 510, 700, 1610),
+    ('Uptown', 510, 1170, -300, 800),
+    ('Airport Corridor', 510, 1170, 800, 1610),
+)
+
+LANDMARKS = (
+    ('Harbor District', -630, 330, 'tower'),
+    ('Old Town', -990, 1050, 'clock'),
+    ('Central City', 270, 330, 'tower'),
+    ('Midtown', 270, 1050, 'tower'),
+    ('Uptown', 990, 330, 'plaza'),
+    ('Airport Corridor', 990, 1230, 'terminal'),
+)
+
+
+def district_name(x, z):
+    """Return the named district containing a world coordinate."""
+    for name, min_x, max_x, min_z, max_z in DISTRICTS:
+        if min_x <= x <= max_x and min_z <= z <= max_z:
+            return name
+    return 'Regional Outskirts'
+
+
 class CityBuilding:
     """A detailed procedural building assembled from facade pieces."""
     def __init__(self, x, z, width, depth, height, style):
@@ -45,24 +72,80 @@ class CityBuilder:
 
     def build(self):
         obstacles = []
-        for x in range(-1200, 1201, 140):
-            for z in range(-300, 1701, 150):
+        # Roads use a 180-unit grid.  Buildings are placed at the centres of
+        # the blocks between roads, so facades cannot spill into the lanes.
+        for x in range(-1170, 1171, 180):
+            for z in range(-210, 1611, 180):
                 clear_approach = any(
                     abs(x - airport_x) < 95 and abs(z - airport_z) < 300
                     for airport_x, airport_z in self.airports.values()
                 )
-                if clear_approach or abs(x) < 35:
+                near_landmark = any(abs(x - landmark[1]) < 75 and
+                                    abs(z - landmark[2]) < 75
+                                    for landmark in LANDMARKS)
+                if clear_approach or near_landmark or abs(x) < 35:
                     continue
-                district = (abs(x) // 140 + max(0, z) // 150) % 4
-                height = 18 + ((abs(x) * 3 + z * 7) % (35 + district * 12))
-                width = 30 + (district % 2) * 8
-                depth = 32 + ((district + 1) % 2) * 8
-                CityBuilding(x, z, width, depth, height, district)
+                district_index = next(
+                    (index for index, district in enumerate(DISTRICTS)
+                     if district[1] <= x <= district[2]
+                     and district[3] <= z <= district[4]),
+                    0,
+                )
+                style = (district_index + abs(x) // 180 + max(0, z) // 180) % 4
+                height = 18 + ((abs(x) * 3 + z * 7) % (35 + style * 12))
+                width = 30 + (style % 2) * 8
+                depth = 32 + ((style + 1) % 2) * 8
+                CityBuilding(x, z, width, depth, height, style)
                 obstacles.append((x, z, width / 2, depth / 2, height))
 
-        Entity(model='cube', scale=(26, 145, 26), position=(0, 72.5, 420),
-               color=color.rgb(90, 95, 112))
-        Entity(model='cube', scale=(5, 35, 5), position=(0, 162, 420),
-               color=color.rgb(75, 80, 95))
-        obstacles.append((0, 420, 13, 13, 145))
+        # A lower-density outer ring keeps the city visually continuous while
+        # avoiding the object count of a fully detailed downtown everywhere.
+        for x in range(-2790, 2791, 360):
+            for z in range(-1530, 3331, 360):
+                in_core = -1350 <= x <= 1350 and -390 <= z <= 1790
+                clear_approach = any(
+                    abs(x - airport_x) < 125 and abs(z - airport_z) < 360
+                    for airport_x, airport_z in self.airports.values()
+                )
+                if in_core or clear_approach:
+                    continue
+                style = (abs(x) // 360 + abs(z) // 360) % 4
+                height = 14 + ((abs(x) * 5 + z * 3) % 28)
+                width = 34 + (style % 2) * 10
+                depth = 34 + ((style + 1) % 2) * 10
+                CityBuilding(x, z, width, depth, height, style)
+                obstacles.append((x, z, width / 2, depth / 2, height))
+
+        self._build_landmarks(obstacles)
         return obstacles
+
+    def _build_landmarks(self, obstacles):
+        """Create recognizable district centres and their collision bounds."""
+        for name, x, z, kind in LANDMARKS:
+            if kind == 'tower':
+                Entity(model='cube', scale=(26, 145, 26),
+                       position=(x, 72.5, z), color=color.rgb(90, 95, 112))
+                Entity(model='cube', scale=(5, 35, 5),
+                       position=(x, 162, z), color=color.rgb(75, 80, 95))
+                height = 145
+            elif kind == 'clock':
+                Entity(model='cube', scale=(42, 55, 42),
+                       position=(x, 27.5, z), color=color.rgb(128, 91, 66))
+                Entity(model='cube', scale=(8, 45, 8),
+                       position=(x, 77.5, z), color=color.rgb(90, 64, 52))
+                height = 100
+            elif kind == 'plaza':
+                Entity(model='cube', scale=(78, 0.5, 78),
+                       position=(x, 0.3, z), color=color.rgb(150, 150, 140))
+                for offset in (-24, 24):
+                    Entity(model='cube', scale=(4, 32, 4),
+                           position=(x + offset, 16, z + offset),
+                           color=color.rgb(70, 110, 82))
+                height = 32
+            else:
+                Entity(model='cube', scale=(80, 10, 48),
+                       position=(x, 5, z), color=color.rgb(180, 190, 205))
+                Entity(model='cube', scale=(48, 18, 8),
+                       position=(x, 19, z), color=color.rgb(65, 75, 92))
+                height = 28
+            obstacles.append((x, z, 42, 42, height))

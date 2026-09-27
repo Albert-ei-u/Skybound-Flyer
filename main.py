@@ -3,7 +3,6 @@
 
 import subprocess
 import argparse
-import math
 from pathlib import Path
 
 try:
@@ -21,10 +20,13 @@ from ursina import (
     Vec3, held_keys, application, time, lerp, Audio, Sequence, Func,
 )
 
-from game.config import AIRPORTS, GROUND_Y, PLANE_GROUND_Y, RUNWAY_Z
-from game.city import CityBuilder
+from game.config import (AIRPORTS, CITY_BOUNDS, GROUND_Y, PLANE_GROUND_Y,
+                         RUNWAY_Z)
+from game.city import CityBuilder, district_name
 from game.landing_sites import LandingSiteBuilder, drone_pad_position
+from game.missions import MissionManager as MissionSystem
 from game.roads import RoadNetwork
+from game.traffic import TrafficManager
 
 CITY_OBSTACLES = []
 
@@ -242,34 +244,16 @@ class ArduinoJoystick:
         return latest
 
 
-class TrafficPlane:
-    """Simple moving aircraft used in the advanced city levels."""
-    def __init__(self, start_x, start_z, phase):
-        self.phase = phase
-        self.root = Entity(position=(start_x, 95, start_z), rotation=(0, 90, 0))
-        Entity(parent=self.root, model='cube', scale=(2, 2, 10), color=color.white)
-        Entity(parent=self.root, model='cube', scale=(12, .3, 2), color=color.rgb(220, 220, 230))
-        Entity(parent=self.root, model='cube', scale=(.3, 3, 2),
-               position=(0, 1.5, -3.5), color=color.red)
-
-    def update(self, dt):
-        self.phase += dt * .18
-        self.root.x += math.sin(self.phase) * dt * 18
-        self.root.z += dt * 12
-        if self.root.z > 1400:
-            self.root.z = -350
-
-
 class World:
     def __init__(self):
-        self.traffic = []
+        self.traffic = TrafficManager()
         Sky()
         sun = DirectionalLight()
         sun.look_at(Vec3(1, -2, -1))
         sun.color = color.rgba(255, 245, 220, 255)
 
         Entity(
-            model='cube', scale=(5000, 1, 5000), position=(0, -0.5, 400),
+            model='cube', scale=(10000, 1, 10000), position=(0, -0.5, 900),
             color=color.rgb(58, 115, 62), texture='white_cube',
             texture_scale=(300, 300), collider='box',
         )
@@ -279,22 +263,12 @@ class World:
         self._build_roads()
 
         CITY_OBSTACLES.extend(CityBuilder(AIRPORTS).build())
-        self.traffic = [
-            TrafficPlane(-520, -250, 0.0),
-            TrafficPlane(420, 120, 2.0),
-            TrafficPlane(180, 500, 4.0),
-        ]
-        self.set_level(0)
 
     def set_level(self, level):
-        # Level 1 is the introductory route; traffic appears from Level 2.
-        for aircraft in self.traffic:
-            aircraft.root.enabled = level >= 1
+        self.traffic.set_level(level)
 
     def update(self, dt):
-        for aircraft in self.traffic:
-            if aircraft.root.enabled:
-                aircraft.update(dt)
+        self.traffic.update(dt)
 
     def _build_airport(self, name, x, z):
         # Compatibility wrapper for older callers.
@@ -366,11 +340,14 @@ class MissionManager:
             return
         self.time_left -= dt
         position = self.plane.root.position
-        if abs(position.x) > 1400 or position.y > 340:
+        if (position.x < CITY_BOUNDS['min_x'] or
+                position.x > CITY_BOUNDS['max_x'] or
+                position.y > 340):
             self.state = 'FAILED'
             self.message = 'OUT OF BOUNDS - press R to restart'
             return
-        if position.z < -600 or position.z > 1800:
+        if (position.z < CITY_BOUNDS['min_z'] or
+                position.z > CITY_BOUNDS['max_z']):
             self.state = 'FAILED'
             self.message = 'LEFT THE CITY MAP - press R to restart'
             return
@@ -495,9 +472,11 @@ class Radar:
                           scale=0.65, color=color.azure)
 
     def _to_ui(self, x, z):
-        # Map the playable region (-1400..1400, -600..1800) into the panel.
-        nx = (x + 1400) / 2800
-        nz = (z + 600) / 2400
+        # Map the complete regional city bounds into the radar panel.
+        nx = ((x - CITY_BOUNDS['min_x']) /
+              (CITY_BOUNDS['max_x'] - CITY_BOUNDS['min_x']))
+        nz = ((z - CITY_BOUNDS['min_z']) /
+              (CITY_BOUNDS['max_z'] - CITY_BOUNDS['min_z']))
         return self.center + Vec3((nx - 0.5) * self.size.x,
                                   (nz - 0.5) * self.size.y, -0.1)
 
@@ -519,7 +498,7 @@ class Radar:
             self.target_dot.enabled = False
 
 
-class Aircraft:
+class Drone:
     def __init__(self):
         start_x, start_z = AIRPORTS['LGA']
         self.root = Entity(position=(start_x, PLANE_GROUND_Y, start_z))
@@ -532,21 +511,22 @@ class Aircraft:
                       position=position, color=tint, rotation=rotation)
 
     def _build_model(self):
-        blue = color.rgb(35, 105, 220)
+        frame = color.rgb(35, 105, 220)
         dark = color.rgb(25, 35, 48)
-        silver = color.rgb(215, 220, 230)
-        self._part((2.4, 2.4, 15), tint=color.rgb(242, 242, 245))
-        self._part((2.5, 0.35, 15.1), position=(0, 0.15, 0), tint=blue)
-        self._part((2.0, 1.6, 2.4), position=(0, 0.45, 6.3), tint=dark)
-        self._part((18, 0.35, 3.8), position=(0, -0.25, -1.2), tint=silver)
-        self._part((6.5, 0.3, 2), position=(0, 0.65, -6.3), tint=silver)
-        self._part((0.35, 3.5, 2.5), position=(0, 2.0, -6.7), tint=blue)
-        for side in (-1, 1):
-            self._part((1.25, 1.25, 2.8), position=(side * 4.5, -1.0, -0.8),
-                       tint=dark)
-            self._part((0.3, 1.2, 0.3), position=(side * 2.3, -1.8, -1),
-                       tint=dark)
-        self._part((0.3, 1.2, 0.3), position=(0, -1.7, 4.8), tint=dark)
+        propeller = color.rgb(185, 195, 210)
+        self._part((4.5, 1.2, 4.5), tint=color.rgb(242, 242, 245))
+        self._part((17, 0.35, 0.55), position=(0, 0.45, 0), tint=frame)
+        self._part((0.55, 0.35, 17), position=(0, 0.48, 0), tint=frame)
+        self._part((2.2, 1.0, 2.0), position=(0, 0.9, 1.0), tint=dark)
+        self._part((1.4, 0.45, 1.2), position=(0, 0.25, 2.6), tint=color.azure)
+        for side_x in (-1, 1):
+            for side_z in (-1, 1):
+                position = (side_x * 6.5, 0.75, side_z * 6.5)
+                self._part((1.4, 0.7, 1.4), position=position, tint=dark)
+                self._part((5.0, 0.08, 0.35), position=position, tint=propeller)
+                self._part((0.35, 0.08, 5.0), position=position, tint=propeller)
+                self._part((0.25, 2.2, 0.25),
+                           position=(position[0], -1.1, position[2]), tint=dark)
 
     def reset(self):
         start_x, start_z = AIRPORTS['LGA']
@@ -596,6 +576,11 @@ class Aircraft:
             self.root.y = PLANE_GROUND_Y
             vertical = 0
         self.root.y = max(PLANE_GROUND_Y, min(350, self.root.y + vertical * dt))
+        if self.root.y <= PLANE_GROUND_Y + 0.05 and self.speed < 5:
+            # A parked drone must sit level on the landing surface.  This
+            # prevents joystick drift from leaving the chase camera inverted.
+            self.root.rotation_x = lerp(self.root.rotation_x, 0, min(1, dt * 8))
+            self.root.rotation_z = lerp(self.root.rotation_z, 0, min(1, dt * 8))
         self.root.position += self.root.forward * self.speed * dt
 
 
@@ -606,8 +591,8 @@ class FlightGame:
         application.fullscreen = False
         camera.fov = 85
         self.world = World()
-        self.plane = Aircraft()
-        self.missions = MissionManager(self.plane)
+        self.plane = Drone()
+        self.missions = MissionSystem(self.plane, CITY_OBSTACLES)
         self.world.set_level(self.missions.level)
         self.sounds = SoundManager()
         self.joystick = ArduinoJoystick(port=joystick_port)
@@ -645,10 +630,14 @@ class FlightGame:
             camera.position = lerp(camera.position, wanted, blend)
             camera.look_at(camera.position + self.plane.root.forward * 30)
         else:
-            wanted = (self.plane.root.position + self.plane.root.up * 8
+            # Chase view uses world-up, not the drone's banked up-vector.
+            # Otherwise a roll rotates the horizon and can make the player
+            # appear to be looking underneath the terrain.
+            wanted = (self.plane.root.position + Vec3(0, 8, 0)
                       - self.plane.root.forward * 26)
             camera.position = lerp(camera.position, wanted, blend)
-            camera.look_at(self.plane.root.position + self.plane.root.up * 1.5)
+            camera.look_at(self.plane.root.position + Vec3(0, 1.5, 0))
+            camera.rotation_z = 0
 
     def update(self):
         dt = min(time.dt, 0.05)
@@ -707,6 +696,10 @@ class FlightGame:
                          f'SPD {self.plane.speed:06.1f}\n'
                          f'THR {self.plane.throttle * 100:05.1f}%\n'
                          f'LEVEL {self.missions.level + 1}\n'
+                         f'CITY REGIONAL GRID\n'
+                         f'DISTRICT {district_name(self.plane.root.x, self.plane.root.z)}\n'
+                         f'AIR TRAFFIC {"ACTIVE" if self.missions.level >= 1 else "LEVEL 2"}\n'
+                         f'VEHICLE DRONE\n'
                          f'VIEW {self.camera_mode}\n'
                          f'SCORE {self.missions.score}\n'
                          f'TIME {max(0, self.missions.time_left):05.0f}\n'
