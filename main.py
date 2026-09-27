@@ -511,6 +511,24 @@ class Drone:
                       position=position, color=tint, rotation=rotation)
 
     def _build_model(self):
+        model_folder = Path('assets/models/carbon_drone')
+        model_path = next(
+            (path for path in (
+                model_folder / 'carbon_drone.obj',
+                model_folder / 'carbon_drone.gltf',
+                model_folder / 'carbon_drone.glb',
+            ) if path.exists()),
+            None,
+        )
+        if model_path:
+            # The downloaded model becomes a child of the same root used by
+            # flight physics, camera tracking, and mission collision checks.
+            Entity(parent=self.root, model=str(model_path), scale=8,
+                   position=(0, 0, 0))
+            self.external_model = True
+            return
+
+        self.external_model = False
         frame = color.rgb(35, 105, 220)
         dark = color.rgb(25, 35, 48)
         propeller = color.rgb(185, 195, 210)

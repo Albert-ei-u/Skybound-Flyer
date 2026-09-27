@@ -33,6 +33,27 @@ The playable bounds now cover a regional 6000 x 5400 world with a dense core
 and a lower-density outer ring. A large collidable terrain foundation keeps
 the drone above the ground surface and prevents it from falling below roads.
 
+## Real-city data pipeline
+
+The optional city pipeline uses OSMnx to export real OpenStreetMap roads and
+building footprints into a local JSON dataset. Install its dependencies with:
+
+```powershell
+python -m pip install -r requirements-city.txt
+```
+
+Then export a first New York training area:
+
+```powershell
+python tools\export_city.py "Queens, New York, USA" `
+  --output assets\cities\nyc_queens.json --distance 5000
+```
+
+The generated dataset is ignored by Git because it is derived content. Keep
+the required OpenStreetMap attribution in the training build. The next runtime
+step is loading this dataset into Ursina and replacing the procedural fallback
+roads/buildings.
+
 Run the configuration tests with:
 
 ```powershell
@@ -130,6 +151,13 @@ origin.
 - Add landing pads, rooftops, helipads, and restricted airspace
 - Add civilian and emergency drone traffic to the city
 - Add drone-specific scoring for precision, battery use, safety, and time
+
+## External drone model
+
+The game checks `assets/models/carbon_drone/` for `carbon_drone.obj`,
+`carbon_drone.gltf`, or `carbon_drone.glb`. If none is present, it uses the
+built-in procedural quadcopter. Add only a model that the project has legal
+permission to redistribute.
 
 ## Audio
 

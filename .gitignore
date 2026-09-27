@@ -29,3 +29,4 @@ env/
 # Generated files
 build/
 dist/
+assets/cities/*.json

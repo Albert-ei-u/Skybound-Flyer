@@ -1,0 +1,4 @@
+# Optional tools for exporting real OpenStreetMap city data.
+# Install separately from the game runtime:
+#   python -m pip install -r requirements-city.txt
+osmnx==2.1.1
