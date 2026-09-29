@@ -222,6 +222,7 @@ menu). Generated meshes and the scene are rebuilt on demand and not committed.
 | R | Reset drone to the start point |
 | H | Show / hide the in-game guide |
 | M | Big map with mission markers |
+| J | Jobs (mission select) |
 | ESC | Pause menu |
 
 Click inside the Game view first so Unity receives keyboard input.
@@ -233,10 +234,21 @@ Skybound > Create Drone Training Scene builds one scene per exported city
 press 1/2/3 to switch city. Each city has cars driving in their lanes and
 pedestrians on the sidewalks, following the real OSM road network.
 
-Missions alternate between **deliveries** (descend into the yellow marker
-and hover to pick up, then again to drop off) and **checkpoint races** (fly
-through the blue rings). Follow the yellow arrow under the compass. Beating
-the timer pays cash plus a time bonus and unlocks the next of 10 levels,
-which are longer, faster and busier. Crashing into buildings or cars fails
-the mission. Progress is saved; press P in the pause menu to restart your
-career.
+**Jobs (GTA-style mission select).** Press ENTER on the title screen or J in
+flight to open the job list. Missions unlock in order:
+
+| Mission | Type | Levels |
+| --- | --- | --- |
+| 1. First Flight | Checkpoint race (low rings) | 3 |
+| 2. Express Delivery | Pick up and deliver a parcel | 3 |
+| 3. Skyline Race | High, fast rings between towers | 3 |
+| 4. Medical Emergency | Several drop-offs against the clock | 3 |
+
+Only Mission 1 / Level 1 is open at first. Finishing a level unlocks the
+next level; finishing a mission's last level unlocks the next mission.
+Completed levels can be replayed. During a job, follow the purple GPS route
+on the radar (bottom-left, calculated along the real roads), the yellow
+blip and the yellow arrow under the compass. Hover inside yellow markers to
+pick up / drop off; fly through blue rings. Crashing shows WASTED and the
+job restarts. Progress and cash are saved; RESET PROGRESS on the job screen
+starts over. Press M for the big map.

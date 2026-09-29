@@ -171,8 +171,11 @@ public sealed class FlightHud : MonoBehaviour
         waypoint.gameObject.SetActive(target.HasValue);
         if (target.HasValue)
         {
-            Vector3 local = drone.transform.InverseTransformPoint(target.Value);
-            waypointArrow.localRotation = Quaternion.Euler(0f, 0f, -Mathf.Atan2(local.x, local.z) * Mathf.Rad2Deg);
+            // Same heading source as the compass, so arrow and compass always agree.
+            Vector3 dir = target.Value - drone.position;
+            float targetBearing = Mathf.Atan2(dir.x, dir.z) * Mathf.Rad2Deg;
+            float relative = Mathf.DeltaAngle(drone.transform.eulerAngles.y, targetBearing);
+            waypointArrow.localRotation = Quaternion.Euler(0f, 0f, -relative);
             waypointDistance.text = $"{Vector3.Distance(drone.position, target.Value):0} m";
         }
     }
@@ -283,8 +286,8 @@ public sealed class FlightHud : MonoBehaviour
     {
         // Compact flight instruments bottom-right, above the timer.
         RectTransform box = Panel(root, "Instruments", new Vector2(1f, 0f), new Vector2(-150f, 110f), new Vector2(260f, 150f), PanelColor);
-        speedText = Label(box, "0", 30, TextAnchor.MiddleLeft, new Vector2(0f, 1f), new Vector2(115f, -35f), new Vector2(210f, 40f));
-        altitudeText = Label(box, "0", 30, TextAnchor.MiddleLeft, new Vector2(0f, 1f), new Vector2(115f, -80f), new Vector2(210f, 40f));
+        speedText = Label(box, "0", 30, TextAnchor.MiddleLeft, new Vector2(0f, 1f), new Vector2(170f, -35f), new Vector2(200f, 40f));
+        altitudeText = Label(box, "0", 30, TextAnchor.MiddleLeft, new Vector2(0f, 1f), new Vector2(170f, -80f), new Vector2(200f, 40f));
         Label(box, "SPD", 13, TextAnchor.MiddleLeft, new Vector2(0f, 1f), new Vector2(30f, -35f), new Vector2(40f, 20f)).color = Accent;
         Label(box, "ALT", 13, TextAnchor.MiddleLeft, new Vector2(0f, 1f), new Vector2(30f, -80f), new Vector2(40f, 20f)).color = Accent;
 
@@ -311,12 +314,12 @@ public sealed class FlightHud : MonoBehaviour
 
     private void BuildMissionHud(Transform root)
     {
-        cashText = Label(root, "$0", 44, TextAnchor.MiddleRight, new Vector2(1f, 1f), new Vector2(-170f, -45f), new Vector2(300f, 56f));
+        cashText = Label(root, "$0", 44, TextAnchor.MiddleRight, new Vector2(1f, 1f), new Vector2(-190f, -45f), new Vector2(300f, 56f));
         cashText.color = Money;
         cashText.fontStyle = FontStyle.Bold;
         cashText.gameObject.AddComponent<UnityEngine.UI.Outline>().effectColor = Color.black;
 
-        missionTitle = Label(root, "", 18, TextAnchor.MiddleRight, new Vector2(1f, 1f), new Vector2(-170f, -90f), new Vector2(400f, 26f));
+        missionTitle = Label(root, "", 18, TextAnchor.MiddleRight, new Vector2(1f, 1f), new Vector2(-230f, -90f), new Vector2(420f, 26f));
         missionTitle.color = Gold;
         missionTitle.fontStyle = FontStyle.Bold;
 
@@ -353,7 +356,7 @@ public sealed class FlightHud : MonoBehaviour
         route.positionCount = 0;
 
         minimapFrame = Panel(root, "Minimap", Vector2.zero, new Vector2(40f + MiniW / 2f, 60f + MiniH / 2f), new Vector2(MiniW, MiniH), new Color(0f, 0f, 0f, 0.8f));
-        Outline(minimapFrame, new Color(0f, 0f, 0f, 0.9f));
+        UiKit.Outline(minimapFrame, new Color(0f, 0f, 0f, 0.9f));
         minimapFrame.gameObject.AddComponent<RectMask2D>();
         var map = new GameObject("Map", typeof(RectTransform), typeof(RawImage));
         map.transform.SetParent(minimapFrame, false);
@@ -394,7 +397,7 @@ public sealed class FlightHud : MonoBehaviour
 
     // ---------------------------------------------------------- menu build
 
-    private GameObject Screen(Transform root, string name, float dim)
+    private GameObject MakeScreen(Transform root, string name, float dim)
     {
         RectTransform screen = Fill(root, name, new Color(0f, 0f, 0f, dim));
         return screen.gameObject;
@@ -402,7 +405,7 @@ public sealed class FlightHud : MonoBehaviour
 
     private void BuildTitle(Transform root)
     {
-        titleScreen = Screen(root, "TitleScreen", 0.45f);
+        titleScreen = MakeScreen(root, "TitleScreen", 0.45f);
         Transform t = titleScreen.transform;
         Text title = Label(t, "SKYBOUND", 120, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0f, 330f), new Vector2(1400f, 140f));
         title.fontStyle = FontStyle.BoldAndItalic;
@@ -414,7 +417,7 @@ public sealed class FlightHud : MonoBehaviour
 
     private void BuildJobs(Transform root)
     {
-        jobScreen = Screen(root, "JobScreen", 0.8f);
+        jobScreen = MakeScreen(root, "JobScreen", 0.8f);
         Transform t = jobScreen.transform;
         Text header = Label(t, "JOBS", 64, TextAnchor.MiddleLeft, new Vector2(0f, 1f), new Vector2(360f, -80f), new Vector2(600f, 80f));
         header.fontStyle = FontStyle.BoldAndItalic;
@@ -469,7 +472,7 @@ public sealed class FlightHud : MonoBehaviour
             int done = MissionSystem.Completed(m);
             RectTransform card = Panel(jobList, "Card", new Vector2(0.5f, 0.5f), new Vector2(startX + m * (cardW + gap), 20f),
                                        new Vector2(cardW, cardH), unlocked ? new Color(0.06f, 0.1f, 0.14f, 0.95f) : new Color(0.08f, 0.08f, 0.08f, 0.9f));
-            Outline(card, unlocked ? new Color(Gold.r, Gold.g, Gold.b, 0.6f) : new Color(1f, 1f, 1f, 0.1f));
+            UiKit.Outline(card, unlocked ? new Color(Gold.r, Gold.g, Gold.b, 0.6f) : new Color(1f, 1f, 1f, 0.1f));
 
             Panel(card, "Stripe", new Vector2(0.5f, 1f), new Vector2(0f, -4f), new Vector2(cardW, 8f), unlocked ? Gold : new Color(0.3f, 0.3f, 0.3f));
             Label(card, $"MISSION {m + 1}", 16, TextAnchor.MiddleLeft, new Vector2(0f, 1f), new Vector2(cardW / 2f, -35f), new Vector2(cardW - 40f, 24f)).color = new Color(1f, 1f, 1f, 0.6f);
@@ -510,7 +513,7 @@ public sealed class FlightHud : MonoBehaviour
 
     private void BuildPause(Transform root)
     {
-        pauseScreen = Screen(root, "PauseScreen", 0.6f);
+        pauseScreen = MakeScreen(root, "PauseScreen", 0.6f);
         Transform t = pauseScreen.transform;
         Text title = Label(t, "PAUSED", 72, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0f, 220f), new Vector2(800f, 90f));
         title.fontStyle = FontStyle.BoldAndItalic;
@@ -528,7 +531,7 @@ public sealed class FlightHud : MonoBehaviour
     private void BuildHelp(Transform root)
     {
         RectTransform panel = Panel(root, "HowToPlay", new Vector2(0f, 0.5f), new Vector2(330f, -40f), new Vector2(560f, 440f), new Color(0.03f, 0.07f, 0.1f, 0.94f));
-        Outline(panel, new Color(Accent.r, Accent.g, Accent.b, 0.5f));
+        UiKit.Outline(panel, new Color(Accent.r, Accent.g, Accent.b, 0.5f));
         helpPanel = panel.gameObject;
         Text title = Label(panel, "HOW TO PLAY", 26, TextAnchor.MiddleCenter, new Vector2(0.5f, 1f), new Vector2(0f, -28f), new Vector2(520f, 36f));
         title.color = Accent;

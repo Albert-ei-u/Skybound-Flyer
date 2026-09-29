@@ -2,19 +2,40 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// GTA-style mission loop: each level gives a timed job (delivery or
-/// checkpoint race) placed on the real streets. Passing pays cash and unlocks
-/// the next, harder level; progress is saved between sessions.
+/// GTA-style jobs. The catalog has several missions, each with levels.
+/// Mission 1 level 1 starts unlocked; finishing a level unlocks the next
+/// level, and finishing a mission's last level unlocks the next mission.
+/// Jobs are placed on the real streets and progress is saved.
 /// </summary>
 public sealed class MissionSystem : MonoBehaviour
 {
     [SerializeField] public RoadNetwork network;
     [SerializeField] public DroneController drone;
 
-    public const int MaxLevel = 10;
+    public enum Kind { Race, Delivery }
 
-    public int Level { get; private set; }
+    public sealed class MissionInfo
+    {
+        public string Name, Description;
+        public Kind Kind;
+        public int Levels;
+    }
+
+    public static readonly MissionInfo[] Catalog =
+    {
+        new MissionInfo { Name = "FIRST FLIGHT", Kind = Kind.Race, Levels = 3,
+            Description = "Learn to fly. Pass through the rings above the streets." },
+        new MissionInfo { Name = "EXPRESS DELIVERY", Kind = Kind.Delivery, Levels = 3,
+            Description = "Pick up parcels and deliver them across the city." },
+        new MissionInfo { Name = "SKYLINE RACE", Kind = Kind.Race, Levels = 3,
+            Description = "High, fast rings between the skyscrapers. Beat the clock." },
+        new MissionInfo { Name = "MEDICAL EMERGENCY", Kind = Kind.Delivery, Levels = 3,
+            Description = "Rush medicine to several hospitals. Every second counts." },
+    };
+
     public int Cash { get; private set; }
+    public int CurrentMission { get; private set; } = -1;
+    public int CurrentLevel { get; private set; }
     public string Title { get; private set; } = "";
     public string Objective { get; private set; } = "";
     public float TimeLeft { get; private set; }
@@ -30,29 +51,125 @@ public sealed class MissionSystem : MonoBehaviour
     /// <summary>Raised with (headline, detail, success) for the big banner.</summary>
     public event System.Action<string, string, bool> Banner;
 
-    private enum Kind { Delivery, Race }
+    /// <summary>Raised after a job is passed, so the HUD can reopen the job list.</summary>
+    public event System.Action Finished;
 
     private static readonly string[] Cargo =
     {
-        "medical supplies", "a phone repair part", "fresh coffee", "legal documents",
-        "a birthday cake", "a spare house key", "concert tickets", "a lost passport",
+        "a phone repair part", "fresh coffee", "legal documents", "a birthday cake",
+        "a spare house key", "concert tickets", "a lost passport", "a laptop",
     };
 
     private readonly List<Transform> targets = new List<Transform>();
     private Kind kind;
-    private bool carrying;
     private float holdTimer;
-    private int reward;
+    private int reward, stopsLeft;
     private Material beaconMaterial, ringMaterial;
 
-    private void Start()
+    private void Awake()
     {
-        Level = PlayerPrefs.GetInt("skybound_level", 1);
         Cash = PlayerPrefs.GetInt("skybound_cash", 0);
         beaconMaterial = Glow(new Color(1f, 0.85f, 0.1f, 0.35f));
         ringMaterial = Glow(new Color(0.2f, 0.9f, 1f, 0.8f));
-        if (drone != null) drone.Crashed += () => Fail("DRONE DESTROYED", "You hit something too hard.");
-        StartMission();
+        Objective = "Free roam. Press J to choose a job.";
+    }
+
+    private void Start()
+    {
+        if (drone != null) drone.Crashed += () => Fail("WASTED", "The drone crashed.");
+    }
+
+    // ------------------------------------------------------------ progress
+
+    /// <summary>How many levels of a mission are complete (0..Levels).</summary>
+    public static int Completed(int mission) => PlayerPrefs.GetInt($"skybound_m{mission}", 0);
+
+    public static bool IsMissionUnlocked(int mission) =>
+        mission == 0 || Completed(mission - 1) >= Catalog[mission - 1].Levels;
+
+    public static bool IsLevelUnlocked(int mission, int level) =>
+        IsMissionUnlocked(mission) && Completed(mission) >= level - 1;
+
+    public void ResetProgress()
+    {
+        for (int m = 0; m < Catalog.Length; m++) PlayerPrefs.DeleteKey($"skybound_m{m}");
+        PlayerPrefs.DeleteKey("skybound_cash");
+        PlayerPrefs.Save();
+        Cash = 0;
+        Abort();
+    }
+
+    // ---------------------------------------------------------------- flow
+
+    /// <summary>Start a job (level is 1-based). Ignored if it is still locked.</summary>
+    public void StartMission(int mission, int level)
+    {
+        if (!IsLevelUnlocked(mission, level)) return;
+        CancelInvoke();
+        ClearTargets();
+        drone.ResetDrone();
+        CurrentMission = mission;
+        CurrentLevel = level;
+        MissionInfo info = Catalog[mission];
+        kind = info.Kind;
+
+        // Difficulty 1..12 across the whole career.
+        int difficulty = mission * 3 + level;
+        float t = difficulty / 12f;
+        Vector3 origin = drone.transform.position;
+        reward = 200 + difficulty * 150;
+        Title = $"{info.Name} · LEVEL {level}";
+
+        if (kind == Kind.Delivery)
+        {
+            stopsLeft = mission == 3 ? level + 1 : 1; // medical: several drop-offs
+            Vector3 pickup = PointNear(origin, 120f + difficulty * 25f);
+            targets.Add(Beacon(pickup));
+            float distance = Vector3.Distance(origin, pickup);
+            Vector3 last = pickup;
+            for (int i = 0; i < stopsLeft; i++)
+            {
+                Vector3 drop = PointNear(last, 250f + difficulty * 40f);
+                targets.Add(Beacon(drop));
+                distance += Vector3.Distance(last, drop);
+                last = drop;
+            }
+            string cargo = mission == 3 ? "medicine" : Cargo[Random.Range(0, Cargo.Length)];
+            Objective = $"Go to the <color=#ffd133>yellow marker</color> and pick up {cargo}.";
+            TimeLeft = distance / Mathf.Lerp(9f, 18f, t) + 30f;
+        }
+        else
+        {
+            int count = 3 + level * 2;
+            float minHeight = mission == 2 ? 40f : 12f;
+            Vector3 last = origin;
+            float distance = 0f;
+            for (int i = 0; i < count; i++)
+            {
+                Vector3 p = PointNear(last, 110f + difficulty * 10f);
+                p.y = Random.Range(minHeight, minHeight + 15f + difficulty * 4f);
+                targets.Add(Ring(p, last));
+                distance += Vector3.Distance(last, p);
+                last = p;
+            }
+            Objective = $"Fly through the <color=#33d9ff>blue rings</color>. {count} to go.";
+            TimeLeft = distance / Mathf.Lerp(8f, 18f, t) + 20f;
+        }
+
+        HighlightNext();
+        Active = true;
+        Banner?.Invoke(info.Name, $"LEVEL {level}", true);
+    }
+
+    /// <summary>Leave the current job without passing or failing (free roam).</summary>
+    public void Abort()
+    {
+        CancelInvoke();
+        Active = false;
+        ClearTargets();
+        CurrentMission = -1;
+        Title = "";
+        Objective = "Free roam. Press J to choose a job.";
     }
 
     private void Update()
@@ -70,15 +187,15 @@ public sealed class MissionSystem : MonoBehaviour
         Transform target = targets[0];
         if (kind == Kind.Race)
         {
-            if (Vector3.Distance(dronePos, target.position) < 9f) ReachTarget();
+            if (Vector3.Distance(dronePos, target.position) < 10f) ReachTarget();
         }
         else
         {
             // Descend into the marker and hold for a moment to pick up / drop off.
             Vector3 flat = dronePos - target.position;
-            bool inside = new Vector2(flat.x, flat.z).magnitude < 5f && flat.y < 6f;
+            bool inside = new Vector2(flat.x, flat.z).magnitude < 6f && flat.y < 8f;
             holdTimer = inside ? holdTimer + Time.deltaTime : 0f;
-            if (holdTimer > 1.2f)
+            if (holdTimer > 1f)
             {
                 holdTimer = 0f;
                 ReachTarget();
@@ -86,53 +203,6 @@ public sealed class MissionSystem : MonoBehaviour
         }
 
         foreach (Transform t in targets) t.Rotate(0f, 60f * Time.deltaTime, 0f);
-    }
-
-    // ----------------------------------------------------------------- flow
-
-    private void StartMission()
-    {
-        ClearTargets();
-        if (network == null || network.RoadCount == 0) return;
-
-        kind = Level % 2 == 1 ? Kind.Delivery : Kind.Race;
-        Vector3 origin = drone.transform.position;
-        reward = 250 * Level + 250;
-
-        if (kind == Kind.Delivery)
-        {
-            string cargo = Cargo[Random.Range(0, Cargo.Length)];
-            Vector3 pickup = PointNear(origin, 150f + Level * 40f);
-            Vector3 dropoff = PointNear(pickup, 300f + Level * 80f);
-            targets.Add(Beacon(pickup));
-            targets.Add(Beacon(dropoff));
-            carrying = false;
-            Title = $"LEVEL {Level} · DELIVERY";
-            Objective = $"Fly to the yellow marker and pick up {cargo}.";
-            float distance = Vector3.Distance(origin, pickup) + Vector3.Distance(pickup, dropoff);
-            TimeLeft = distance / Mathf.Lerp(3.5f, 7f, Level / (float)MaxLevel) + 25f;
-        }
-        else
-        {
-            int count = 4 + Level;
-            Vector3 last = origin;
-            float distance = 0f;
-            for (int i = 0; i < count; i++)
-            {
-                Vector3 p = PointNear(last, 120f + Level * 15f);
-                p.y = Random.Range(15f, 25f + Level * 6f);
-                targets.Add(Ring(p, last));
-                distance += Vector3.Distance(last, p);
-                last = p;
-            }
-            Title = $"LEVEL {Level} · CHECKPOINT RACE";
-            Objective = $"Fly through all {count} rings before time runs out.";
-            TimeLeft = distance / Mathf.Lerp(5f, 9f, Level / (float)MaxLevel) + 15f;
-        }
-
-        HighlightNext();
-        Active = true;
-        Banner?.Invoke(Title, Objective, true);
     }
 
     private void ReachTarget()
@@ -146,15 +216,17 @@ public sealed class MissionSystem : MonoBehaviour
             return;
         }
 
-        if (kind == Kind.Delivery && !carrying)
+        if (kind == Kind.Delivery)
         {
-            carrying = true;
-            Objective = "Package collected. Deliver it to the marker.";
-            Banner?.Invoke("PACKAGE COLLECTED", Objective, true);
+            bool first = targets.Count == stopsLeft;
+            Objective = targets.Count == 1
+                ? "Deliver to the <color=#ffd133>yellow marker</color>."
+                : $"Deliver to the <color=#ffd133>yellow marker</color>. {targets.Count} stops left.";
+            Banner?.Invoke(first ? "PACKAGE COLLECTED" : "DELIVERED", "", true);
         }
-        else if (kind == Kind.Race)
+        else
         {
-            Objective = $"{targets.Count} rings to go.";
+            Objective = $"Fly through the <color=#33d9ff>blue rings</color>. {targets.Count} to go.";
         }
         HighlightNext();
     }
@@ -164,40 +236,31 @@ public sealed class MissionSystem : MonoBehaviour
         Active = false;
         int bonus = Mathf.RoundToInt(TimeLeft) * 5;
         Cash += reward + bonus;
-        Level = Mathf.Min(Level + 1, MaxLevel);
-        PlayerPrefs.SetInt("skybound_level", Level);
         PlayerPrefs.SetInt("skybound_cash", Cash);
+        if (Completed(CurrentMission) < CurrentLevel) PlayerPrefs.SetInt($"skybound_m{CurrentMission}", CurrentLevel);
         PlayerPrefs.Save();
-        Banner?.Invoke("MISSION PASSED", $"+${reward}  time bonus +${bonus}", true);
-        Invoke(nameof(StartMission), 4f);
+
+        string unlocked = CurrentLevel < Catalog[CurrentMission].Levels
+            ? $"Level {CurrentLevel + 1} unlocked"
+            : CurrentMission + 1 < Catalog.Length ? $"New mission unlocked: {Catalog[CurrentMission + 1].Name}" : "All missions complete!";
+        Objective = "";
+        Banner?.Invoke("MISSION PASSED", $"+${reward + bonus}   ·   {unlocked}", true);
+        Invoke(nameof(RaiseFinished), 4f);
     }
+
+    private void RaiseFinished() => Finished?.Invoke();
 
     private void Fail(string headline, string reason)
     {
         if (!Active) return;
         Active = false;
         ClearTargets();
+        Objective = "";
         Banner?.Invoke(headline, reason + "  Retrying…", false);
         Invoke(nameof(Retry), 3.5f);
     }
 
-    private void Retry()
-    {
-        drone.ResetDrone();
-        StartMission();
-    }
-
-    /// <summary>Restart the career from level 1 (used by the pause menu).</summary>
-    public void ResetProgress()
-    {
-        PlayerPrefs.DeleteKey("skybound_level");
-        PlayerPrefs.DeleteKey("skybound_cash");
-        Level = 1;
-        Cash = 0;
-        CancelInvoke();
-        Active = false;
-        Retry();
-    }
+    private void Retry() => StartMission(CurrentMission, CurrentLevel);
 
     // -------------------------------------------------------------- markers
 
@@ -225,7 +288,7 @@ public sealed class MissionSystem : MonoBehaviour
         column.transform.localScale = new Vector3(8f, 40f, 8f);
         column.GetComponent<Renderer>().sharedMaterial = beaconMaterial;
         column.GetComponent<Renderer>().shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-        AddRing(beacon, new Vector3(0f, 0.3f, 0f), 5f, Quaternion.identity);
+        AddRing(beacon, new Vector3(0f, 0.3f, 0f), 6f, Quaternion.identity);
         return beacon;
     }
 
@@ -235,7 +298,7 @@ public sealed class MissionSystem : MonoBehaviour
         ring.position = position;
         Vector3 dir = position - from;
         dir.y = 0f;
-        AddRing(ring, Vector3.zero, 7f, Quaternion.LookRotation(dir.sqrMagnitude > 0.1f ? dir : Vector3.forward) * Quaternion.Euler(90f, 0f, 0f));
+        AddRing(ring, Vector3.zero, 8f, Quaternion.LookRotation(dir.sqrMagnitude > 0.1f ? dir : Vector3.forward) * Quaternion.Euler(90f, 0f, 0f));
         return ring;
     }
 
@@ -245,7 +308,7 @@ public sealed class MissionSystem : MonoBehaviour
         go.transform.SetParent(parent, false);
         go.transform.localPosition = offset;
         go.transform.localRotation = rotation;
-        go.GetComponent<MeshFilter>().sharedMesh = Torus(radius, 0.5f);
+        go.GetComponent<MeshFilter>().sharedMesh = Torus(radius, 0.6f);
         go.GetComponent<MeshRenderer>().sharedMaterial = ringMaterial;
     }
 

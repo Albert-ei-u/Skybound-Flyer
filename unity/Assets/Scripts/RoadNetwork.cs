@@ -53,6 +53,83 @@ public sealed class RoadNetwork : MonoBehaviour
         return Point(road, index);
     }
 
+    /// <summary>
+    /// GPS route along the roads (Dijkstra over junctions), like the GTA
+    /// minimap route. Returns the points from near <paramref name="from"/> to <paramref name="to"/>.
+    /// </summary>
+    public List<Vector3> FindRoute(Vector3 from, Vector3 to)
+    {
+        BuildJunctions();
+        var route = new List<Vector3>();
+        Vector2Int start = NearestJunction(from), goal = NearestJunction(to);
+
+        var distance = new Dictionary<Vector2Int, float> { [start] = 0f };
+        var cameFrom = new Dictionary<Vector2Int, (Vector2Int node, int road, bool forward)>();
+        var open = new List<Vector2Int> { start };
+        var closed = new HashSet<Vector2Int>();
+
+        while (open.Count > 0)
+        {
+            int bestIndex = 0;
+            for (int i = 1; i < open.Count; i++)
+                if (distance[open[i]] < distance[open[bestIndex]]) bestIndex = i;
+            Vector2Int node = open[bestIndex];
+            open.RemoveAt(bestIndex);
+            if (node == goal) break;
+            if (!closed.Add(node)) continue;
+
+            foreach (int road in junctions[node])
+            {
+                bool forward = Key(Point(road, 0)) == node;
+                Vector2Int other = Key(forward ? Point(road, PointCount(road) - 1) : Point(road, 0));
+                if (closed.Contains(other) || !junctions.ContainsKey(other)) continue;
+                float cost = distance[node] + RoadLength(road);
+                if (!distance.TryGetValue(other, out float known) || cost < known)
+                {
+                    distance[other] = cost;
+                    cameFrom[other] = (node, road, forward);
+                    open.Add(other);
+                }
+            }
+        }
+
+        // Walk back from the goal, expanding each road into its points.
+        var segments = new List<(int road, bool forward)>();
+        for (Vector2Int node = goal; cameFrom.TryGetValue(node, out var step); node = step.node)
+        {
+            segments.Add((step.road, step.forward));
+        }
+        segments.Reverse();
+
+        route.Add(from);
+        foreach (var (road, forward) in segments)
+        {
+            int count = PointCount(road);
+            for (int i = 0; i < count; i++) route.Add(Point(road, forward ? i : count - 1 - i));
+        }
+        route.Add(to);
+        return route;
+    }
+
+    private Vector2Int NearestJunction(Vector3 p)
+    {
+        Vector2Int best = default;
+        float bestDistance = float.MaxValue;
+        foreach (Vector2Int key in junctions.Keys)
+        {
+            float d = (new Vector2(key.x, key.y) - new Vector2(p.x, p.z)).sqrMagnitude;
+            if (d < bestDistance) { bestDistance = d; best = key; }
+        }
+        return best;
+    }
+
+    private float RoadLength(int road)
+    {
+        float length = 0f;
+        for (int i = 1; i < PointCount(road); i++) length += Vector3.Distance(Point(road, i - 1), Point(road, i));
+        return length;
+    }
+
     private void BuildJunctions()
     {
         if (junctions != null) return;
