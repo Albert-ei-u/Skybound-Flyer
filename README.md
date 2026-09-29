@@ -54,6 +54,13 @@ the required OpenStreetMap attribution in the training build. The next runtime
 step is loading this dataset into Ursina and replacing the procedural fallback
 roads/buildings.
 
+## Unity/C# migration
+
+The production migration is being built in `unity/` using Unity 6.6 and C#.
+The first slice contains `DroneController.cs` and `DroneCamera.cs`. The Python
+version remains available as a reference while we migrate flight controls,
+missions, city data, Arduino input, and scoring in separate steps.
+
 Run the configuration tests with:
 
 ```powershell
@@ -155,9 +162,11 @@ origin.
 ## External drone model
 
 The game checks `assets/models/carbon_drone/` for `carbon_drone.obj`,
-`carbon_drone.gltf`, or `carbon_drone.glb`. If none is present, it uses the
-built-in procedural quadcopter. Add only a model that the project has legal
-permission to redistribute.
+`carbon_drone.gltf`, or `carbon_drone.glb`. The external model is loaded only
+when requested because large GLB files can take a long time to convert on the
+first startup. Run with `--drone-model` after optimizing the asset. Without
+that flag, the game starts immediately with the built-in procedural quadcopter.
+Add only a model that the project has legal permission to redistribute.
 
 ## Audio
 

@@ -29,4 +29,18 @@ env/
 # Generated files
 build/
 dist/
+cache/
 assets/cities/*.json
+
+# Unity generated files
+unity/Library/
+unity/Temp/
+unity/Obj/
+unity/Build/
+unity/Builds/
+unity/Logs/
+unity/UserSettings/
+unity/MemoryCaptures/
+unity/.vs/
+unity/*.csproj
+unity/*.sln

@@ -1,7 +1,11 @@
 # Carbon drone model
 
-Place the legally obtained Sketchfab model files in this folder using one of
-these names:
+Place the legally obtained Sketchfab model files in this folder. The game
+currently detects the supplied nested `drone/fly.glb` automatically, or accepts one of
+these preferred names:
+
+The optimized runtime copy is `drone/skybound_drone.glb`; the original source
+file remains in `drone/source/fly.glb`.
 
 - `carbon_drone.obj` plus its texture files, or
 - `carbon_drone.gltf` plus its referenced assets, or

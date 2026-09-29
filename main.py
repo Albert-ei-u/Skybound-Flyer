@@ -499,31 +499,35 @@ class Radar:
 
 
 class Drone:
-    def __init__(self):
+    def __init__(self, use_external_model=False):
         start_x, start_z = AIRPORTS['LGA']
         self.root = Entity(position=(start_x, PLANE_GROUND_Y, start_z))
         self.speed = 0.0
         self.throttle = 0.0
-        self._build_model()
+        self._build_model(use_external_model)
 
     def _part(self, scale, position=(0, 0, 0), tint=color.white, rotation=(0, 0, 0)):
         return Entity(parent=self.root, model='cube', scale=scale,
                       position=position, color=tint, rotation=rotation)
 
-    def _build_model(self):
+    def _build_model(self, use_external_model=False):
         model_folder = Path('assets/models/carbon_drone')
-        model_path = next(
-            (path for path in (
-                model_folder / 'carbon_drone.obj',
-                model_folder / 'carbon_drone.gltf',
-                model_folder / 'carbon_drone.glb',
-            ) if path.exists()),
-            None,
+        preferred_models = (
+            model_folder / 'carbon_drone.obj',
+            model_folder / 'carbon_drone.gltf',
+            model_folder / 'carbon_drone.glb',
         )
-        if model_path:
+        model_path = next((path for path in preferred_models if path.exists()), None)
+        if model_path is None:
+            # Accept downloaded/exported filenames such as the supplied
+            # `fly.glb` without requiring the user to rename the asset.
+            model_path = next(iter(sorted(model_folder.rglob('*.glb'))), None)
+        if model_path is None:
+            model_path = next(iter(sorted(model_folder.rglob('*.gltf'))), None)
+        if model_path and use_external_model:
             # The downloaded model becomes a child of the same root used by
             # flight physics, camera tracking, and mission collision checks.
-            Entity(parent=self.root, model=str(model_path), scale=8,
+            Entity(parent=self.root, model=str(model_path), scale=1,
                    position=(0, 0, 0))
             self.external_model = True
             return
@@ -603,13 +607,13 @@ class Drone:
 
 
 class FlightGame:
-    def __init__(self, joystick_port='COM11'):
+    def __init__(self, joystick_port='COM11', use_external_model=False):
         self.app = Ursina()
         application.title = 'Skybound - 3D Flight Simulator'
         application.fullscreen = False
         camera.fov = 85
         self.world = World()
-        self.plane = Drone()
+        self.plane = Drone(use_external_model=use_external_model)
         self.missions = MissionSystem(self.plane, CITY_OBSTACLES)
         self.world.set_level(self.missions.level)
         self.sounds = SoundManager()
@@ -745,6 +749,8 @@ class FlightGame:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', default='COM11', help='Arduino serial port, e.g. COM11')
+    parser.add_argument('--drone-model', action='store_true',
+                        help='Load the external GLB drone model (slower startup)')
     args = parser.parse_args()
-    game = FlightGame(joystick_port=args.port)
+    game = FlightGame(joystick_port=args.port, use_external_model=args.drone_model)
     game.app.run()
