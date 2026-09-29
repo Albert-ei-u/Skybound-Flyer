@@ -1,24 +1,28 @@
 # Skybound Unity runtime
 
-This folder is the C# migration target for Unity 6.6. The Python/Ursina
-prototype remains at the repository root while systems are migrated and
-verified one at a time.
+The repository root is the active Unity 6.6 project created by Unity Hub. The
+Python/Ursina prototype remains available at the repository root as a
+reference while systems are migrated and verified one at a time. The C#
+scripts in this folder are the migration source copies; Unity uses the copies
+under the root `assets/` folder.
 
 ## Create/open the Unity project
 
-Open Unity Hub and add this `unity` folder as a project. If Unity asks for a
-template, use **3D (URP)**. The project version is recorded in
-`ProjectSettings/ProjectVersion.txt`.
+Open the repository root in Unity Hub. It already contains the generated
+`ProjectSettings` and `Packages` folders. Use the **3D (URP)** template only
+if creating a fresh Unity project.
 
 ## First scene setup
 
-1. Create a scene named `Scenes/DroneTraining.unity`.
-2. Create a `Drone` GameObject with a `Rigidbody`.
-3. Add the supplied optimized model from:
-   `../assets/models/carbon_drone/drone/skybound_drone.glb`.
-4. Add `DroneController.cs` to the drone root.
-5. Create a camera and add `DroneCamera.cs`; assign the drone as `target`.
-6. Add a plane with a collider so the drone has a landing surface.
+After Unity finishes importing the project, use:
+
+```text
+Skybound → Create Drone Training Scene
+```
+
+The editor tool creates `Scenes/DroneTraining.unity`, imports the supplied
+drone model, adds the Rigidbody and controller, creates a collidable training
+ground, and wires the stabilized camera automatically.
 
 The first C# controls are:
 

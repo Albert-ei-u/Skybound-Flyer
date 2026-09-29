@@ -40,26 +40,28 @@ def export_city(place, output, distance):
             'python -m pip install -r requirements-city.txt'
         ) from exc
 
-    boundary_gdf = ox.geocode_to_gdf(place)
-    boundary = boundary_gdf.geometry.iloc[0]
-    centroid = boundary.centroid
+    # Geocode to a point so neighbourhoods and landmarks work, not only
+    # places that OSM stores as boundary polygons.
+    lat, lon = ox.geocode(place)
     roads_graph = ox.graph_from_point(
-        (centroid.y, centroid.x), dist=distance, network_type='drive',
+        (lat, lon), dist=distance, network_type='drive',
         simplify=True,
     )
     roads_graph = ox.project_graph(roads_graph)
     _, edges = ox.graph_to_gdfs(roads_graph)
 
     # Query OSM features in WGS84 first, then project both datasets to metres.
-    buildings = ox.features_from_polygon(
-        boundary,
-        tags={'building': True},
+    # Buildings use the same radius as roads so large places (a whole
+    # borough) stay small enough to render in real time.
+    buildings = ox.features_from_point(
+        (lat, lon), tags={'building': True}, dist=distance,
     )
-    buildings = ox.project_gdf(buildings)
-    projected_boundary = ox.project_gdf(boundary_gdf).geometry.iloc[0]
+    buildings = buildings[buildings.geometry.geom_type.isin(
+        ['Polygon', 'MultiPolygon'])]
+    buildings = ox.projection.project_gdf(buildings, to_crs=edges.crs)
 
-    origin_x = float(projected_boundary.centroid.x)
-    origin_y = float(projected_boundary.centroid.y)
+    origin_x = float(edges.total_bounds[[0, 2]].mean())
+    origin_y = float(edges.total_bounds[[1, 3]].mean())
     road_features = []
     for _, edge in edges.iterrows():
         geometry = edge.geometry
@@ -80,9 +82,13 @@ def export_city(place, output, distance):
         levels = building.get('building:levels')
         try:
             height = float(height)
+            if height != height:  # NaN from missing OSM tags
+                raise ValueError
         except (TypeError, ValueError):
             try:
                 height = max(6.0, float(levels) * 3.2)
+                if height != height:
+                    raise ValueError
             except (TypeError, ValueError):
                 height = 10.0
         building_features.append({

@@ -184,3 +184,27 @@ The game also detects another `.ogg`, `.mp3`, or `.wav` music file in that folde
 ## GitHub
 
 Commit the source code, Arduino sketch, requirements file, README, and permitted audio assets. The Python virtual environment is excluded by `.gitignore` and should not be committed.
+
+## Unity/C# migration
+
+The active Unity 6.6 project is the repository root because Unity has created
+`ProjectSettings/`, `Packages/`, and `Library/` there. C# migration files are
+under `assets/Scripts/` and `assets/Editor/`. After Unity finishes compiling,
+choose `Skybound > Create Drone Training Scene` to generate the first playable
+drone scene automatically.
+
+## Realistic Unity city (Midtown Manhattan)
+
+The Unity scene is built from real OpenStreetMap data:
+
+1. Export the city (already done for Times Square, ~900 m radius):
+   `python tools\export_city.py "Times Square, New York, USA" --output assets\cities\midtown_manhattan.json --distance 900`
+2. Open the project root in Unity 6 and run **Skybound > Create Drone Training Scene**.
+
+The builder (`assets/Editor/SkyboundSceneBuilder.cs` + `CityImporter.cs`)
+extrudes every OSM building footprint to its real height with procedural
+glass/brick/limestone/concrete facades, lays textured roads, adds a
+procedural sky, fog and soft shadows, imports the carbon drone model via
+glTFast, and attaches the uGUI flight HUD (`assets/Scripts/FlightHud.cs`:
+compass, artificial horizon, speed/altitude, battery, minimap, start/pause
+menu). Generated meshes and the scene are rebuilt on demand and not committed.
