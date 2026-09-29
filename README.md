@@ -208,3 +208,35 @@ procedural sky, fog and soft shadows, imports the carbon drone model via
 glTFast, and attaches the uGUI flight HUD (`assets/Scripts/FlightHud.cs`:
 compass, artificial horizon, speed/altitude, battery, minimap, start/pause
 menu). Generated meshes and the scene are rebuilt on demand and not committed.
+
+## How to play
+
+| Key | Action |
+| --- | --- |
+| ENTER | Start / resume |
+| W | Fly forward (hold Shift to boost) |
+| S | Slow down / brake (reverse when stopped) |
+| Q / E | Turn left / right |
+| A / D | Roll left / right (slide sideways) |
+| ↑ / ↓ | Climb / descend and land |
+| R | Reset drone to the start point |
+| H | Show / hide the in-game guide |
+| M | Big map with mission markers |
+| ESC | Pause menu |
+
+Click inside the Game view first so Unity receives keyboard input.
+
+### Cities, traffic and missions
+
+Skybound > Create Drone Training Scene builds one scene per exported city
+(New York, London with left-hand traffic, Kigali). On the start/pause menu
+press 1/2/3 to switch city. Each city has cars driving in their lanes and
+pedestrians on the sidewalks, following the real OSM road network.
+
+Missions alternate between **deliveries** (descend into the yellow marker
+and hover to pick up, then again to drop off) and **checkpoint races** (fly
+through the blue rings). Follow the yellow arrow under the compass. Beating
+the timer pays cash plus a time bonus and unlocks the next of 10 levels,
+which are longer, faster and busier. Crashing into buildings or cars fails
+the mission. Progress is saved; press P in the pause menu to restart your
+career.

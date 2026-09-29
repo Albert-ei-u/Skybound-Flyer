@@ -21,6 +21,7 @@ public static class CityImporter
     {
         var root = (Dictionary<string, object>)MiniJson.Parse(File.ReadAllText(jsonPath));
         var city = new GameObject("City");
+        city.AddComponent<RoadNetwork>();
 
         BuildBuildings((List<object>)root["buildings"], facades, roof, meshFolder, city.transform);
         BuildRoads((List<object>)root["roads"], road, meshFolder, city.transform, out spawn);
@@ -141,6 +142,18 @@ public static class CityImporter
         var vertices = new List<Vector3>();
         var uvs = new List<Vector2>();
         var triangles = new List<int>();
+        var centreline = new List<Vector3>();
+        var starts = new List<int>();
+        var widths = new List<float>();
+
+        void AddLine(List<Vector2> line, float width)
+        {
+            AddRoadStrip(line, width, vertices, uvs, triangles);
+            if (line.Count < 2) return;
+            starts.Add(centreline.Count);
+            widths.Add(width);
+            foreach (Vector2 p in line) centreline.Add(new Vector3(p.x, 0f, p.y));
+        }
 
         foreach (object entry in roads)
         {
@@ -150,13 +163,18 @@ public static class CityImporter
             // MultiLineString exports are nested one level deeper.
             if (coords.Count > 0 && coords[0] is List<object> first && first.Count > 0 && first[0] is List<object>)
             {
-                foreach (object part in coords) AddRoadStrip(ReadLine((List<object>)part), width, vertices, uvs, triangles);
+                foreach (object part in coords) AddLine(ReadLine((List<object>)part), width);
             }
             else
             {
-                AddRoadStrip(ReadLine(coords), width, vertices, uvs, triangles);
+                AddLine(ReadLine(coords), width);
             }
         }
+
+        RoadNetwork network = parent.GetComponent<RoadNetwork>();
+        network.points = centreline.ToArray();
+        network.roadStarts = starts.ToArray();
+        network.roadWidths = widths.ToArray();
 
         // Spawn on the road point nearest the city centre so the drone starts in the open.
         spawn = Vector3.zero;

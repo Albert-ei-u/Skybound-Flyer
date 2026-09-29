@@ -11,19 +11,27 @@ using UnityEngine.SceneManagement;
 /// </summary>
 public static class SkyboundSceneBuilder
 {
-    private const string ScenePath = "Assets/Scenes/DroneTraining.unity";
     private const string DroneModelPath = "Assets/models/carbon_drone/drone/source/fly.glb";
-    private const string CityDataPath = "Assets/cities/midtown_manhattan.json";
     private const string MusicPath = "Assets/audio/DST-TowerDefenseTheme_1.mp3.ogg";
     private const string GeneratedFolder = "Assets/Generated";
     private const float DroneSize = 1.2f;
 
+    /// <summary>Playable cities: OSM export, scene name, menu label, left-hand traffic.</summary>
+    private static readonly (string json, string scene, string label, bool driveOnLeft)[] Cities =
+    {
+        ("Assets/cities/midtown_manhattan.json", "NewYork", "New York", false),
+        ("Assets/cities/london_westminster.json", "London", "London", true),
+        ("Assets/cities/kigali.json", "Kigali", "Kigali", false),
+    };
+
     [MenuItem("Skybound/Create Drone Training Scene")]
     public static void CreateDroneTrainingScene()
     {
-        if (!File.Exists(CityDataPath))
+        var available = new System.Collections.Generic.List<(string json, string scene, string label, bool driveOnLeft)>();
+        foreach (var city in Cities) if (File.Exists(city.json)) available.Add(city);
+        if (available.Count == 0)
         {
-            EditorUtility.DisplayDialog("Skybound", $"City data not found at {CityDataPath}.\n\n" +
+            EditorUtility.DisplayDialog("Skybound", "No city data found in Assets/cities.\n\n" +
                 "Run: python tools/export_city.py \"Times Square, New York, USA\" " +
                 "--output assets/cities/midtown_manhattan.json --distance 900", "OK");
             return;
@@ -31,16 +39,11 @@ public static class SkyboundSceneBuilder
 
         EnsureFolder("Assets/Scenes");
         ResetFolder(GeneratedFolder);
-        EnsureFolder($"{GeneratedFolder}/Meshes");
         EnsureFolder($"{GeneratedFolder}/Textures");
 
-        Scene scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
-
-        CreateLighting();
-        CreateGround();
-        EditorUtility.DisplayProgressBar("Skybound", "Building city from OpenStreetMap…", 0.3f);
         try
         {
+            EditorUtility.DisplayProgressBar("Skybound", "Creating materials…", 0.05f);
             Material[] facades =
             {
                 FacadeMaterial("GlassTower", new Color(0.35f, 0.45f, 0.55f), new Color(0.12f, 0.18f, 0.25f), 0.9f, 0.85f, 0.6f),
@@ -50,18 +53,56 @@ public static class SkyboundSceneBuilder
             };
             Material roof = SolidMaterial("Roof", new Color(0.32f, 0.32f, 0.33f), 0.1f);
             Material road = RoadMaterial();
+            Material pavement = PavementMaterial();
+            Material sky = SkyMaterial();
 
-            CityImporter.Build(CityDataPath, facades, roof, road, $"{GeneratedFolder}/Meshes",
-                               out Vector3 spawn);
+            string[] sceneNames = new string[available.Count];
+            string[] labels = new string[available.Count];
+            var buildScenes = new EditorBuildSettingsScene[available.Count];
+            for (int i = 0; i < available.Count; i++)
+            {
+                sceneNames[i] = available[i].scene;
+                labels[i] = available[i].label;
+                buildScenes[i] = new EditorBuildSettingsScene($"Assets/Scenes/{available[i].scene}.unity", true);
+            }
 
-            GameObject drone = CreateDrone(spawn + Vector3.up * 1f);
-            CreateCamera(drone.transform);
-            CreateHud(drone);
-            CreateMusic();
+            for (int i = 0; i < available.Count; i++)
+            {
+                var city = available[i];
+                EditorUtility.DisplayProgressBar("Skybound", $"Building {city.label} from OpenStreetMap…", (i + 0.5f) / available.Count);
+                string meshFolder = $"{GeneratedFolder}/{city.scene}";
+                EnsureFolder(meshFolder);
 
-            EditorSceneManager.SaveScene(scene, ScenePath);
-            Selection.activeGameObject = drone;
-            Debug.Log("Skybound DroneTraining scene created with the Midtown Manhattan city.");
+                Scene scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+                CreateLighting(sky);
+                CreateGround(pavement);
+                if (city.scene == "Kigali") TintGround(new Color(0.55f, 0.75f, 0.45f)); // green hills
+                GameObject cityRoot = CityImporter.Build(city.json, facades, roof, road, meshFolder, out Vector3 spawn);
+                RoadNetwork network = cityRoot.GetComponent<RoadNetwork>();
+                network.driveOnLeft = city.driveOnLeft;
+
+                GameObject drone = CreateDrone(spawn + Vector3.up * 1f);
+                CreateCamera(drone.transform);
+
+                var traffic = new GameObject("CityLife").AddComponent<TrafficSystem>();
+                traffic.network = network;
+                var missions = new GameObject("Missions").AddComponent<MissionSystem>();
+                missions.network = network;
+                missions.drone = drone.GetComponent<DroneController>();
+
+                FlightHud hud = CreateHud(drone);
+                hud.cityName = city.label;
+                hud.missions = missions;
+                hud.citySceneNames = sceneNames;
+                hud.cityLabels = labels;
+                CreateMusic();
+
+                EditorSceneManager.SaveScene(scene, $"Assets/Scenes/{city.scene}.unity");
+            }
+
+            EditorBuildSettings.scenes = buildScenes;
+            EditorSceneManager.OpenScene($"Assets/Scenes/{available[0].scene}.unity");
+            Debug.Log($"Skybound built {available.Count} city scenes: {string.Join(", ", labels)}.");
         }
         finally
         {
@@ -141,10 +182,11 @@ public static class SkyboundSceneBuilder
         cameraObject.tag = "MainCamera";
     }
 
-    private static void CreateHud(GameObject drone)
+    private static FlightHud CreateHud(GameObject drone)
     {
         var hud = new GameObject("FlightHud").AddComponent<FlightHud>();
         hud.drone = drone.GetComponent<Rigidbody>();
+        return hud;
     }
 
     private static void CreateMusic()
@@ -160,7 +202,19 @@ public static class SkyboundSceneBuilder
 
     // --------------------------------------------------------------- world look
 
-    private static void CreateLighting()
+    private static Material SkyMaterial()
+    {
+        var sky = new Material(Shader.Find("Skybox/Procedural")) { name = "Sky" };
+        sky.SetFloat("_SunSize", 0.035f);
+        sky.SetFloat("_AtmosphereThickness", 1.05f);
+        sky.SetColor("_SkyTint", new Color(0.5f, 0.6f, 0.75f));
+        sky.SetColor("_GroundColor", new Color(0.35f, 0.35f, 0.38f));
+        sky.SetFloat("_Exposure", 1.2f);
+        AssetDatabase.CreateAsset(sky, $"{GeneratedFolder}/Sky.mat");
+        return sky;
+    }
+
+    private static void CreateLighting(Material sky)
     {
         GameObject sunObject = new GameObject("Sun");
         Light sun = sunObject.AddComponent<Light>();
@@ -170,14 +224,6 @@ public static class SkyboundSceneBuilder
         sun.shadows = LightShadows.Soft;
         sun.shadowStrength = 0.85f;
         sunObject.transform.rotation = Quaternion.Euler(38f, -35f, 0f);
-
-        var sky = new Material(Shader.Find("Skybox/Procedural")) { name = "Sky" };
-        sky.SetFloat("_SunSize", 0.035f);
-        sky.SetFloat("_AtmosphereThickness", 1.05f);
-        sky.SetColor("_SkyTint", new Color(0.5f, 0.6f, 0.75f));
-        sky.SetColor("_GroundColor", new Color(0.35f, 0.35f, 0.38f));
-        sky.SetFloat("_Exposure", 1.2f);
-        AssetDatabase.CreateAsset(sky, $"{GeneratedFolder}/Sky.mat");
 
         RenderSettings.skybox = sky;
         RenderSettings.sun = sun;
@@ -195,17 +241,30 @@ public static class SkyboundSceneBuilder
         QualitySettings.antiAliasing = 4;
     }
 
-    private static void CreateGround()
+    private static void CreateGround(Material pavement)
     {
         GameObject ground = GameObject.CreatePrimitive(PrimitiveType.Plane);
         ground.name = "Ground";
         ground.transform.localScale = new Vector3(400f, 1f, 400f);
+        ground.GetComponent<Renderer>().sharedMaterial = pavement;
+        GameObjectUtility.SetStaticEditorFlags(ground, StaticEditorFlags.BatchingStatic);
+    }
+
+    private static void TintGround(Color tint)
+    {
+        var ground = GameObject.Find("Ground").GetComponent<Renderer>();
+        var material = new Material(ground.sharedMaterial) { color = tint };
+        AssetDatabase.CreateAsset(material, $"{GeneratedFolder}/Ground_{tint.GetHashCode()}.mat");
+        ground.sharedMaterial = material;
+    }
+
+    private static Material PavementMaterial()
+    {
         Texture2D tex = SaveTexture("Pavement", PavementTexture());
         Material material = SolidMaterial("Pavement", Color.white, 0.15f);
         material.mainTexture = tex;
         material.mainTextureScale = new Vector2(1000f, 1000f); // 4 m slabs across 4 km
-        ground.GetComponent<Renderer>().sharedMaterial = material;
-        GameObjectUtility.SetStaticEditorFlags(ground, StaticEditorFlags.BatchingStatic);
+        return material;
     }
 
     // ---------------------------------------------------------------- materials
