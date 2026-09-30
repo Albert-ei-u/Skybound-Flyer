@@ -30,6 +30,9 @@ public sealed class DroneController : MonoBehaviour
     /// <summary>Raised when the drone hits something faster than crashImpactSpeed.</summary>
     public event System.Action Crashed;
 
+    /// <summary>Raised after the drone is put back on its start point (R, joystick button, pause menu).</summary>
+    public event System.Action WasReset;
+
     private Rigidbody body;
     private Vector3 startPosition;
     private Quaternion startRotation;
@@ -156,6 +159,7 @@ public sealed class DroneController : MonoBehaviour
         transform.rotation = resetPoint != null ? resetPoint.rotation : startRotation;
         body.linearVelocity = Vector3.zero;
         body.angularVelocity = Vector3.zero;
+        WasReset?.Invoke();
     }
 
     private static float ReadAxis(KeyCode positive, KeyCode negative)

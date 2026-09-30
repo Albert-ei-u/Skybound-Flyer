@@ -72,6 +72,9 @@ public sealed class MissionSystem : MonoBehaviour
     private Material beaconMaterial, ringMaterial, beamMaterial, homeMaterial;
     private Transform homeMarker;
     private Rigidbody droneBody;
+    private bool waitingForTakeoff, restarting;
+    private string flightObjective = "";
+    private Vector3 launchPoint;
 
     private bool ReturningHome => targets.Count == 1 && targets[0] == homeMarker && homeMarker != null;
 
@@ -92,6 +95,7 @@ public sealed class MissionSystem : MonoBehaviour
         {
             drone.Crashed += () => Fail("WASTED", "The drone crashed.");
             droneBody = drone.GetComponent<Rigidbody>();
+            drone.WasReset += OnDroneReset;
         }
     }
 
@@ -123,7 +127,10 @@ public sealed class MissionSystem : MonoBehaviour
         if (!IsLevelUnlocked(mission, level)) return;
         CancelInvoke();
         ClearTargets();
+        restarting = true;
         drone.ResetDrone();
+        restarting = false;
+        launchPoint = droneBase != null ? droneBase.position : drone.transform.position;
         CurrentMission = mission;
         CurrentLevel = level;
         MissionInfo info = Catalog[mission];
@@ -182,6 +189,10 @@ public sealed class MissionSystem : MonoBehaviour
         }
 
         HighlightNext();
+        // The clock waits on the pad until the drone takes off.
+        flightObjective = Objective;
+        Objective = "Take off from the <color=#33ff66>drone base</color> to start the clock.";
+        waitingForTakeoff = true;
         Active = true;
         Banner?.Invoke(info.Name, $"LEVEL {level}", true);
     }
@@ -191,6 +202,7 @@ public sealed class MissionSystem : MonoBehaviour
     {
         CancelInvoke();
         Active = false;
+        waitingForTakeoff = false;
         ClearTargets();
         CurrentMission = -1;
         Title = "";
@@ -200,6 +212,15 @@ public sealed class MissionSystem : MonoBehaviour
     private void Update()
     {
         if (!Active || drone == null) return;
+
+        if (waitingForTakeoff)
+        {
+            Vector3 fromPad = drone.transform.position - launchPoint;
+            bool leftPad = new Vector2(fromPad.x, fromPad.z).magnitude > PadRadius || fromPad.y > 3f;
+            if (!leftPad) return;
+            waitingForTakeoff = false;
+            Objective = flightObjective;
+        }
 
         TimeLeft -= Time.deltaTime;
         if (TimeLeft <= 0f)
@@ -307,6 +328,17 @@ public sealed class MissionSystem : MonoBehaviour
     }
 
     private void Retry() => StartMission(CurrentMission, CurrentLevel);
+
+    /// <summary>
+    /// Resetting during a job sends the drone back to the base and restarts
+    /// the level, so the clock waits for a fresh takeoff.
+    /// </summary>
+    private void OnDroneReset()
+    {
+        if (restarting || !Active) return;
+        StartMission(CurrentMission, CurrentLevel);
+        Banner?.Invoke("RESET", "Back at the drone base. Take off to start the clock.", false);
+    }
 
     // -------------------------------------------------------------- markers
 
