@@ -76,8 +76,20 @@ Sketch location:
 arduino/flight_joystick/flight_joystick.ino
 ```
 
-Upload it with Arduino IDE using **Arduino Uno**. Unity serial input is not
-wired up yet.
+Upload it with Arduino IDE using **Arduino Uno**, then close the Serial Monitor
+(only one program can use the port). Press Play in Unity: the drone finds the
+Arduino automatically and logs "Arduino joystick connected on COMx" in the
+Console. To force a port, set **Joystick Port** on the Drone's
+`DroneController` component. The keyboard keeps working alongside the sticks.
+
+| Stick | Action |
+| --- | --- |
+| Left stick left/right | Roll (slide sideways) |
+| Left stick up/down | Climb / descend |
+| Right stick left/right | Turn |
+| Right stick up | Fly forward (further = faster) |
+| Right stick down | Brake / reverse |
+| Left stick button | Reset drone |
 
 ### Wiring
 

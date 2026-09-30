@@ -27,7 +27,7 @@ void loop() {
   int camera = digitalRead(CAMERA_BUTTON) == LOW ? 1 : 0;
   int reset = digitalRead(RESET_BUTTON) == LOW ? 1 : 0;
 
-  // CSV format read by Python:
+  // CSV format read by Unity (ArduinoJoystick.cs):
   // joy1_x,joy1_y,joy2_x,joy2_y,brake,camera,reset
   Serial.print(joy1_x);
   Serial.print(',');

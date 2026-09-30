@@ -22,12 +22,19 @@ public sealed class DroneController : MonoBehaviour
 
     [SerializeField] private float crashImpactSpeed = 10f;
 
+    [Header("Arduino joystick")]
+    [Tooltip("Serial port such as COM12. Leave empty to find the Arduino automatically.")]
+    [SerializeField] private string joystickPort = "";
+    [SerializeField] private bool useJoystick = true;
+
     /// <summary>Raised when the drone hits something faster than crashImpactSpeed.</summary>
     public event System.Action Crashed;
 
     private Rigidbody body;
     private Vector3 startPosition;
     private Quaternion startRotation;
+    private ArduinoJoystick joystick;
+    private System.Threading.Tasks.Task<ArduinoJoystick> joystickConnect;
 
     private void Awake()
     {
@@ -35,6 +42,23 @@ public sealed class DroneController : MonoBehaviour
         startPosition = transform.position;
         startRotation = transform.rotation;
         body.interpolation = RigidbodyInterpolation.Interpolate;
+    }
+
+    private void OnEnable()
+    {
+        // Search serial ports off the main thread so startup never freezes.
+        if (useJoystick && joystick == null && joystickConnect == null)
+        {
+            string portName = joystickPort;
+            joystickConnect = System.Threading.Tasks.Task.Run(() => ArduinoJoystick.Open(portName));
+        }
+    }
+
+    private void OnDisable()
+    {
+        joystick?.Dispose();
+        joystick = null;
+        joystickConnect = null;
     }
 
     private void FixedUpdate()
@@ -45,6 +69,16 @@ public sealed class DroneController : MonoBehaviour
         bool braking = Input.GetKey(KeyCode.S);
         float rollInput = ReadAxis(KeyCode.D, KeyCode.A);
         float yawInput = ReadAxis(KeyCode.E, KeyCode.Q);
+
+        // Arduino sticks add to the keyboard, so either can fly the drone.
+        if (joystick != null && joystick.Connected)
+        {
+            liftInput = Mathf.Clamp(liftInput + joystick.Lift, -1f, 1f);
+            rollInput = Mathf.Clamp(rollInput + joystick.Roll, -1f, 1f);
+            yawInput = Mathf.Clamp(yawInput + joystick.Yaw, -1f, 1f);
+            forwardInput = Mathf.Max(forwardInput, joystick.Throttle);
+            braking |= joystick.Throttle < -0.5f || joystick.Brake;
+        }
 
         // Hover assist: cancel gravity so the drone holds altitude when no
         // climb/descend key is pressed.
@@ -98,7 +132,14 @@ public sealed class DroneController : MonoBehaviour
 
     private void Update()
     {
-        if (Input.GetKeyDown(KeyCode.R))
+        if (joystickConnect != null && joystickConnect.IsCompleted)
+        {
+            joystick = joystickConnect.Status == System.Threading.Tasks.TaskStatus.RanToCompletion ? joystickConnect.Result : null;
+            joystickConnect = null;
+            if (joystick == null) Debug.Log("No Arduino joystick found; using keyboard.");
+        }
+
+        if (Input.GetKeyDown(KeyCode.R) || (joystick != null && joystick.ConsumeResetPress()))
         {
             ResetDrone();
         }
