@@ -35,7 +35,8 @@ public sealed class FlightHud : MonoBehaviour
     private CanvasGroup banner;
     private float bannerTime;
     private Camera minimapCamera;
-    private LineRenderer route;
+    private LineRenderer route, course;
+    private float bigRange = BigRange;
     private float routeTimer;
     private bool bigMap;
     private readonly List<RectTransform> blips = new List<RectTransform>();
@@ -48,6 +49,19 @@ public sealed class FlightHud : MonoBehaviour
 
     private void Start()
     {
+        // Old scenes (e.g. DroneTraining) have no missions: jump to a real city scene.
+        if (missions == null) missions = FindFirstObjectByType<MissionSystem>();
+        if (missions == null)
+        {
+            string city = citySceneNames.Length > 0 ? citySceneNames[0] : "NewYork";
+            if (Application.CanStreamedLevelBeLoaded(city))
+            {
+                SceneManager.LoadScene(city);
+                return;
+            }
+            Debug.LogError("This scene has no missions. Run Skybound > Create Drone Training Scene, then open Assets/Scenes/NewYork.");
+        }
+
         Canvas hud = CreateCanvas(transform, "HUD", 0);
         hudRoot = hud.transform;
         BuildCompass(hudRoot);
@@ -73,6 +87,7 @@ public sealed class FlightHud : MonoBehaviour
 
     private void Update()
     {
+        if (titleScreen == null) return; // redirected to another scene
         HandleKeys();
         if (drone == null) return;
         UpdateInstruments();
@@ -183,7 +198,17 @@ public sealed class FlightHud : MonoBehaviour
     private void UpdateMap()
     {
         float width = bigMap ? BigSize : MiniW, height = bigMap ? BigSize : MiniH;
-        float range = bigMap ? BigRange : MiniRange;
+        // The big map zooms out to fit the whole mission course.
+        if (bigMap)
+        {
+            float farthest = 0f;
+            if (missions != null)
+                foreach (Vector3 p in missions.AllTargets)
+                    farthest = Mathf.Max(farthest, Vector2.Distance(new Vector2(p.x, p.z), new Vector2(drone.position.x, drone.position.z)));
+            bigRange = Mathf.Clamp(farthest * 1.15f, 300f, 1500f);
+            minimapCamera.orthographicSize = bigRange;
+        }
+        float range = bigMap ? bigRange : MiniRange;
         float scale = height * 0.5f / range; // UI pixels per metre
 
         // GPS route along the real roads, refreshed every second.
@@ -197,7 +222,17 @@ public sealed class FlightHud : MonoBehaviour
             for (int i = 0; i < path.Count; i++) route.SetPosition(i, new Vector3(path[i].x, 1f, path[i].z));
         }
         if (!target.HasValue) route.positionCount = 0;
-        route.widthMultiplier = bigMap ? 16f : 7f;
+        route.widthMultiplier = (bigMap ? 16f : 7f) * range / (bigMap ? BigRange : MiniRange);
+
+        // Mission roadmap: line through every remaining ring / stop, in order.
+        course.positionCount = 0;
+        if (missions != null)
+        {
+            var points = new List<Vector3>(missions.AllTargets);
+            course.positionCount = points.Count;
+            for (int i = 0; i < points.Count; i++) course.SetPosition(i, new Vector3(points[i].x, 0.5f, points[i].z));
+        }
+        course.widthMultiplier = route.widthMultiplier * 0.6f;
 
         // Blips: yellow = next objective, blue = later ones; pinned to the edge when off-map.
         int used = 0;
@@ -210,6 +245,10 @@ public sealed class FlightHud : MonoBehaviour
                     RectTransform blip = Panel(minimapFrame, "Blip", new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(18f, 18f), Color.white);
                     blip.GetComponent<Image>().sprite = Circle();
                     blip.gameObject.AddComponent<UnityEngine.UI.Outline>().effectColor = Color.black;
+                    Text number = Label(blip, "", 13, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(30f, 30f));
+                    number.color = Color.black;
+                    number.fontStyle = FontStyle.Bold;
+                    number.GetComponent<Shadow>().enabled = false;
                     blips.Add(blip);
                 }
                 Vector3 offset = point - drone.position;
@@ -220,7 +259,8 @@ public sealed class FlightHud : MonoBehaviour
                 b.gameObject.SetActive(true);
                 b.SetAsLastSibling();
                 b.anchoredPosition = pos;
-                b.sizeDelta = Vector2.one * (used == 0 ? 20f : 13f);
+                b.sizeDelta = Vector2.one * (used == 0 ? 24f : 20f);
+                b.GetComponentInChildren<Text>().text = (used + 1).ToString(); // order to fly them in
                 b.GetComponent<Image>().color = used == 0 ? Gold : new Color(0.2f, 0.85f, 1f);
                 used++;
             }
@@ -235,7 +275,7 @@ public sealed class FlightHud : MonoBehaviour
         minimapFrame.anchorMin = minimapFrame.anchorMax = bigMap ? new Vector2(0.5f, 0.5f) : Vector2.zero;
         minimapFrame.anchoredPosition = bigMap ? Vector2.zero : new Vector2(40f + MiniW / 2f, 60f + MiniH / 2f);
         minimapFrame.sizeDelta = bigMap ? new Vector2(BigSize, BigSize) : new Vector2(MiniW, MiniH);
-        minimapCamera.orthographicSize = bigMap ? BigRange : MiniRange;
+        minimapCamera.orthographicSize = bigMap ? bigRange : MiniRange;
         minimapCamera.aspect = bigMap ? 1f : MiniW / MiniH;
     }
 
@@ -354,6 +394,14 @@ public sealed class FlightHud : MonoBehaviour
         routeObject.transform.rotation = Quaternion.Euler(90f, 0f, 0f); // lie flat, face the map camera
         route.numCornerVertices = 2;
         route.positionCount = 0;
+
+        var courseObject = new GameObject("MissionCourse") { layer = RouteLayer };
+        course = courseObject.AddComponent<LineRenderer>();
+        course.material = route.material;
+        course.startColor = course.endColor = new Color(0.2f, 0.85f, 1f, 0.9f); // blue roadmap between rings
+        course.alignment = LineAlignment.TransformZ;
+        courseObject.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
+        course.positionCount = 0;
 
         minimapFrame = Panel(root, "Minimap", Vector2.zero, new Vector2(40f + MiniW / 2f, 60f + MiniH / 2f), new Vector2(MiniW, MiniH), new Color(0f, 0f, 0f, 0.8f));
         UiKit.Outline(minimapFrame, new Color(0f, 0f, 0f, 0.9f));

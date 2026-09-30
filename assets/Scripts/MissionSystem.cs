@@ -64,13 +64,15 @@ public sealed class MissionSystem : MonoBehaviour
     private Kind kind;
     private float holdTimer;
     private int reward, stopsLeft;
-    private Material beaconMaterial, ringMaterial;
+    private Material beaconMaterial, ringMaterial, beamMaterial;
 
     private void Awake()
     {
         Cash = PlayerPrefs.GetInt("skybound_cash", 0);
         beaconMaterial = Glow(new Color(1f, 0.85f, 0.1f, 0.35f));
-        ringMaterial = Glow(new Color(0.2f, 0.9f, 1f, 0.8f));
+        ringMaterial = Glow(new Color(0.2f, 0.9f, 1f, 0.95f));
+        ringMaterial.SetColor("_EmissionColor", new Color(0.2f, 0.9f, 1f) * 3f); // bright even in shadow
+        beamMaterial = Glow(new Color(0.2f, 0.9f, 1f, 0.18f));
         Objective = "Free roam. Press J to choose a job.";
     }
 
@@ -298,7 +300,15 @@ public sealed class MissionSystem : MonoBehaviour
         ring.position = position;
         Vector3 dir = position - from;
         dir.y = 0f;
-        AddRing(ring, Vector3.zero, 8f, Quaternion.LookRotation(dir.sqrMagnitude > 0.1f ? dir : Vector3.forward) * Quaternion.Euler(90f, 0f, 0f));
+        AddRing(ring, Vector3.zero, 10f, Quaternion.LookRotation(dir.sqrMagnitude > 0.1f ? dir : Vector3.forward) * Quaternion.Euler(90f, 0f, 0f));
+
+        // Light beam from the street up through the ring so it can be spotted from far away.
+        GameObject beam = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        Destroy(beam.GetComponent<Collider>());
+        beam.transform.SetParent(ring, false);
+        beam.transform.localScale = new Vector3(2.5f, 150f, 2.5f);
+        beam.GetComponent<Renderer>().sharedMaterial = beamMaterial;
+        beam.GetComponent<Renderer>().shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         return ring;
     }
 
@@ -308,7 +318,7 @@ public sealed class MissionSystem : MonoBehaviour
         go.transform.SetParent(parent, false);
         go.transform.localPosition = offset;
         go.transform.localRotation = rotation;
-        go.GetComponent<MeshFilter>().sharedMesh = Torus(radius, 0.6f);
+        go.GetComponent<MeshFilter>().sharedMesh = Torus(radius, 1.3f);
         go.GetComponent<MeshRenderer>().sharedMaterial = ringMaterial;
     }
 

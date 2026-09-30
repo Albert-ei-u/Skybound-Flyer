@@ -1,8 +1,0 @@
-# Flight Simulator - Python dependencies
-#
-# Ursina is a beginner-friendly wrapper around Panda3D. It gives us fast
-# 3D rendering, a built-in game loop, easy asset/primitive creation and
-# simple input handling - perfect for prototyping a flight sim quickly.
-ursina==6.1.2
-pyserial==3.5
-pygame==2.6.1
