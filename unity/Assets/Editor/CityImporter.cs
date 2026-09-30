@@ -23,8 +23,15 @@ public static class CityImporter
         var city = new GameObject("City");
         city.AddComponent<RoadNetwork>();
 
-        BuildBuildings((List<object>)root["buildings"], facades, roof, meshFolder, city.transform);
-        BuildRoads((List<object>)root["roads"], road, meshFolder, city.transform, out spawn);
+        var outlines = new List<List<Vector2>>();
+        BuildBuildings((List<object>)root["buildings"], facades, roof, meshFolder, city.transform, outlines);
+        BuildRoads((List<object>)root["roads"], road, meshFolder, city.transform, out Vector3 roadSpawn);
+
+        if (!FindOpenGround(city.GetComponent<RoadNetwork>(), outlines, out spawn))
+        {
+            Debug.LogWarning("No open ground found for the drone base; starting on the nearest road.");
+            spawn = roadSpawn;
+        }
         return city;
     }
 
@@ -39,7 +46,7 @@ public static class CityImporter
     }
 
     private static void BuildBuildings(List<object> buildings, Material[] facades, Material roof,
-                                       string meshFolder, Transform parent)
+                                       string meshFolder, Transform parent, List<List<Vector2>> outlines)
     {
         // One buffer per (chunk, facade style) so each chunk gets varied facades.
         var buffers = new Dictionary<(Vector2Int, int), MeshBuffer>();
@@ -49,6 +56,7 @@ public static class CityImporter
             var building = (Dictionary<string, object>)entry;
             List<Vector2> outline = ReadRing((List<object>)building["coordinates"]);
             if (outline.Count < 3) continue;
+            outlines.Add(outline);
 
             float height = ToFloat(building["height"]);
             height = float.IsNaN(height) ? 12f : Mathf.Clamp(height, 4f, 450f);
@@ -132,6 +140,98 @@ public static class CityImporter
         {
             b.Roofs.Add(roofStart + index);
         }
+    }
+
+    // --------------------------------------------------------------- drone base
+
+    private const float BaseCell = 4f;          // search grid resolution (m)
+    private const float BaseSearchRadius = 700f;
+    private const float RoadClearance = 12f;    // metres from the road edge
+    private const float BuildingClearance = 14f; // metres from any wall
+
+    /// <summary>
+    /// Finds the open ground closest to the city centre that is well clear of
+    /// every road and building, so the drone base never sits on a street.
+    /// </summary>
+    private static bool FindOpenGround(RoadNetwork network, List<List<Vector2>> outlines, out Vector3 spot)
+    {
+        int size = Mathf.CeilToInt(BaseSearchRadius * 2f / BaseCell);
+        var blocked = new bool[size, size];
+
+        Vector2 CellCentre(int x, int z) =>
+            new Vector2(-BaseSearchRadius + (x + 0.5f) * BaseCell, -BaseSearchRadius + (z + 0.5f) * BaseCell);
+
+        // Visits every cell within `margin` of the box (min, max) and blocks those the test accepts.
+        void BlockAround(Vector2 min, Vector2 max, float margin, System.Func<Vector2, bool> test)
+        {
+            int x0 = Mathf.Max(0, Mathf.FloorToInt((min.x - margin + BaseSearchRadius) / BaseCell));
+            int x1 = Mathf.Min(size - 1, Mathf.FloorToInt((max.x + margin + BaseSearchRadius) / BaseCell));
+            int z0 = Mathf.Max(0, Mathf.FloorToInt((min.y - margin + BaseSearchRadius) / BaseCell));
+            int z1 = Mathf.Min(size - 1, Mathf.FloorToInt((max.y + margin + BaseSearchRadius) / BaseCell));
+            for (int x = x0; x <= x1; x++)
+                for (int z = z0; z <= z1; z++)
+                    if (!blocked[x, z] && test(CellCentre(x, z))) blocked[x, z] = true;
+        }
+
+        for (int road = 0; road < network.RoadCount; road++)
+        {
+            float reach = network.Width(road) * 0.5f + RoadClearance;
+            for (int i = 0; i + 1 < network.PointCount(road); i++)
+            {
+                Vector3 a3 = network.Point(road, i), b3 = network.Point(road, i + 1);
+                Vector2 a = new Vector2(a3.x, a3.z), b = new Vector2(b3.x, b3.z);
+                BlockAround(Vector2.Min(a, b), Vector2.Max(a, b), reach,
+                            p => DistanceToSegment(p, a, b) <= reach);
+            }
+        }
+
+        foreach (List<Vector2> ring in outlines)
+        {
+            Vector2 min = ring[0], max = ring[0];
+            foreach (Vector2 p in ring) { min = Vector2.Min(min, p); max = Vector2.Max(max, p); }
+            BlockAround(min, max, BuildingClearance, p =>
+            {
+                if (InsidePolygon(p, ring)) return true;
+                for (int i = 0; i < ring.Count; i++)
+                    if (DistanceToSegment(p, ring[i], ring[(i + 1) % ring.Count]) <= BuildingClearance) return true;
+                return false;
+            });
+        }
+
+        // Nearest free cell to the centre. Skip the edge of the search area,
+        // where roads and buildings just outside it were never checked.
+        spot = Vector3.zero;
+        float best = float.MaxValue;
+        int border = Mathf.CeilToInt(BuildingClearance / BaseCell) + 1;
+        for (int x = border; x < size - border; x++)
+        {
+            for (int z = border; z < size - border; z++)
+            {
+                if (blocked[x, z]) continue;
+                Vector2 c = CellCentre(x, z);
+                if (c.sqrMagnitude < best) { best = c.sqrMagnitude; spot = new Vector3(c.x, 0f, c.y); }
+            }
+        }
+        return best < float.MaxValue;
+    }
+
+    private static float DistanceToSegment(Vector2 p, Vector2 a, Vector2 b)
+    {
+        Vector2 ab = b - a;
+        float t = ab.sqrMagnitude < 1e-6f ? 0f : Mathf.Clamp01(Vector2.Dot(p - a, ab) / ab.sqrMagnitude);
+        return Vector2.Distance(p, a + ab * t);
+    }
+
+    private static bool InsidePolygon(Vector2 p, List<Vector2> ring)
+    {
+        bool inside = false;
+        for (int i = 0, j = ring.Count - 1; i < ring.Count; j = i++)
+        {
+            if ((ring[i].y > p.y) != (ring[j].y > p.y) &&
+                p.x < (ring[j].x - ring[i].x) * (p.y - ring[i].y) / (ring[j].y - ring[i].y) + ring[i].x)
+                inside = !inside;
+        }
+        return inside;
     }
 
     // -------------------------------------------------------------------- roads

@@ -11,7 +11,12 @@ public sealed class MissionSystem : MonoBehaviour
 {
     [SerializeField] public RoadNetwork network;
     [SerializeField] public DroneController drone;
+    [Tooltip("Helipad where the drone starts and must land to finish every job.")]
+    [SerializeField] public Transform droneBase;
 
+    private const float PadRadius = 7f;
+    private const float LandedHeight = 1.5f; // metres above the pad surface
+    private const float LandedSpeed = 1.5f;  // m/s
     public enum Kind { Race, Delivery }
 
     public sealed class MissionInfo
@@ -64,12 +69,17 @@ public sealed class MissionSystem : MonoBehaviour
     private Kind kind;
     private float holdTimer;
     private int reward, stopsLeft;
-    private Material beaconMaterial, ringMaterial, beamMaterial;
+    private Material beaconMaterial, ringMaterial, beamMaterial, homeMaterial;
+    private Transform homeMarker;
+    private Rigidbody droneBody;
+
+    private bool ReturningHome => targets.Count == 1 && targets[0] == homeMarker && homeMarker != null;
 
     private void Awake()
     {
         Cash = PlayerPrefs.GetInt("skybound_cash", 0);
         beaconMaterial = Glow(new Color(1f, 0.85f, 0.1f, 0.35f));
+        homeMaterial = Glow(new Color(0.2f, 1f, 0.4f, 0.3f));
         ringMaterial = Glow(new Color(0.2f, 0.9f, 1f, 0.95f));
         ringMaterial.SetColor("_EmissionColor", new Color(0.2f, 0.9f, 1f) * 3f); // bright even in shadow
         beamMaterial = Glow(new Color(0.2f, 0.9f, 1f, 0.18f));
@@ -78,7 +88,11 @@ public sealed class MissionSystem : MonoBehaviour
 
     private void Start()
     {
-        if (drone != null) drone.Crashed += () => Fail("WASTED", "The drone crashed.");
+        if (drone != null)
+        {
+            drone.Crashed += () => Fail("WASTED", "The drone crashed.");
+            droneBody = drone.GetComponent<Rigidbody>();
+        }
     }
 
     // ------------------------------------------------------------ progress
@@ -158,6 +172,15 @@ public sealed class MissionSystem : MonoBehaviour
             TimeLeft = distance / Mathf.Lerp(8f, 18f, t) + 20f;
         }
 
+        // Every job ends by flying back and landing on the drone base.
+        if (droneBase != null)
+        {
+            Vector3 last = targets[targets.Count - 1].position;
+            homeMarker = Beacon(droneBase.position, homeMaterial);
+            targets.Add(homeMarker);
+            TimeLeft += Vector3.Distance(last, droneBase.position) / 10f + 25f;
+        }
+
         HighlightNext();
         Active = true;
         Banner?.Invoke(info.Name, $"LEVEL {level}", true);
@@ -187,7 +210,21 @@ public sealed class MissionSystem : MonoBehaviour
 
         Vector3 dronePos = drone.transform.position;
         Transform target = targets[0];
-        if (kind == Kind.Race)
+        if (ReturningHome)
+        {
+            // Touch down on the pad: inside the circle, low and nearly stopped.
+            Vector3 offset = dronePos - target.position;
+            float speed = droneBody != null ? droneBody.linearVelocity.magnitude : 0f;
+            bool landed = new Vector2(offset.x, offset.z).magnitude < PadRadius &&
+                          offset.y < LandedHeight && speed < LandedSpeed;
+            holdTimer = landed ? holdTimer + Time.deltaTime : 0f;
+            if (holdTimer > 1.5f)
+            {
+                holdTimer = 0f;
+                ReachTarget();
+            }
+        }
+        else if (kind == Kind.Race)
         {
             if (Vector3.Distance(dronePos, target.position) < 10f) ReachTarget();
         }
@@ -218,17 +255,24 @@ public sealed class MissionSystem : MonoBehaviour
             return;
         }
 
-        if (kind == Kind.Delivery)
+        if (ReturningHome)
         {
-            bool first = targets.Count == stopsLeft;
-            Objective = targets.Count == 1
+            Objective = "Return to the <color=#33ff66>drone base</color> and land on the pad.";
+            Banner?.Invoke(kind == Kind.Delivery ? "DELIVERED" : "ALL RINGS CLEARED", "Return to base", true);
+        }
+        else if (kind == Kind.Delivery)
+        {
+            int homeStops = homeMarker != null ? 1 : 0;
+            bool first = targets.Count == stopsLeft + homeStops;
+            int dropsLeft = targets.Count - homeStops;
+            Objective = dropsLeft == 1
                 ? "Deliver to the <color=#ffd133>yellow marker</color>."
-                : $"Deliver to the <color=#ffd133>yellow marker</color>. {targets.Count} stops left.";
+                : $"Deliver to the <color=#ffd133>yellow marker</color>. {dropsLeft} stops left.";
             Banner?.Invoke(first ? "PACKAGE COLLECTED" : "DELIVERED", "", true);
         }
         else
         {
-            Objective = $"Fly through the <color=#33d9ff>blue rings</color>. {targets.Count} to go.";
+            Objective = $"Fly through the <color=#33d9ff>blue rings</color>. {targets.Count - (homeMarker != null ? 1 : 0)} to go.";
         }
         HighlightNext();
     }
@@ -279,7 +323,9 @@ public sealed class MissionSystem : MonoBehaviour
         return best;
     }
 
-    private Transform Beacon(Vector3 position)
+    private Transform Beacon(Vector3 position) => Beacon(position, beaconMaterial);
+
+    private Transform Beacon(Vector3 position, Material material)
     {
         var beacon = new GameObject("MissionMarker").transform;
         beacon.position = position;
@@ -288,7 +334,7 @@ public sealed class MissionSystem : MonoBehaviour
         column.transform.SetParent(beacon, false);
         column.transform.localPosition = new Vector3(0f, 40f, 0f);
         column.transform.localScale = new Vector3(8f, 40f, 8f);
-        column.GetComponent<Renderer>().sharedMaterial = beaconMaterial;
+        column.GetComponent<Renderer>().sharedMaterial = material;
         column.GetComponent<Renderer>().shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         AddRing(beacon, new Vector3(0f, 0.3f, 0f), 6f, Quaternion.identity);
         return beacon;
@@ -334,6 +380,7 @@ public sealed class MissionSystem : MonoBehaviour
     {
         foreach (Transform t in targets) if (t != null) Destroy(t.gameObject);
         targets.Clear();
+        homeMarker = null;
     }
 
     private static Material Glow(Color color)

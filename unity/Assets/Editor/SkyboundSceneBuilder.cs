@@ -81,7 +81,8 @@ public static class SkyboundSceneBuilder
                 RoadNetwork network = cityRoot.GetComponent<RoadNetwork>();
                 network.driveOnLeft = city.driveOnLeft;
 
-                GameObject drone = CreateDrone(spawn + Vector3.up * 1f);
+                Transform droneBase = CreateDroneBase(spawn);
+                GameObject drone = CreateDrone(spawn + Vector3.up * (PadHeight + 0.6f));
                 CreateCamera(drone.transform);
 
                 var traffic = new GameObject("CityLife").AddComponent<TrafficSystem>();
@@ -89,6 +90,7 @@ public static class SkyboundSceneBuilder
                 var missions = new GameObject("Missions").AddComponent<MissionSystem>();
                 missions.network = network;
                 missions.drone = drone.GetComponent<DroneController>();
+                missions.droneBase = droneBase;
 
                 FlightHud hud = CreateHud(drone);
                 hud.cityName = city.label;
@@ -111,6 +113,71 @@ public static class SkyboundSceneBuilder
     }
 
     // ------------------------------------------------------------------- drone
+
+    private const float PadRadius = 8f;
+    private const float PadHeight = 0.3f;
+
+    /// <summary>
+    /// Helipad where the drone starts and must land to finish a job. The spot
+    /// comes from CityImporter.FindOpenGround, clear of roads and buildings.
+    /// </summary>
+    private static Transform CreateDroneBase(Vector3 position)
+    {
+        Material concrete = PadMaterial("PadConcrete", new Color(0.32f, 0.33f, 0.35f), Color.black);
+        Material marking = PadMaterial("PadMarking", Color.white, new Color(0.9f, 0.9f, 0.9f) * 0.6f);
+        Material lights = PadMaterial("PadLights", new Color(0.2f, 1f, 0.4f), new Color(0.2f, 1f, 0.4f) * 2.5f);
+
+        var root = new GameObject("DroneBase").transform;
+        root.position = position;
+
+        GameObject pad = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        pad.name = "Helipad";
+        pad.transform.SetParent(root, false);
+        pad.transform.localPosition = new Vector3(0f, PadHeight * 0.5f, 0f);
+        pad.transform.localScale = new Vector3(PadRadius * 2f, PadHeight * 0.5f, PadRadius * 2f);
+        pad.GetComponent<Renderer>().sharedMaterial = concrete;
+
+        // White "H": two uprights and a crossbar, just above the pad surface.
+        void Stripe(Vector3 offset, Vector3 scale)
+        {
+            GameObject s = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            Object.DestroyImmediate(s.GetComponent<Collider>());
+            s.transform.SetParent(root, false);
+            s.transform.localPosition = offset + Vector3.up * (PadHeight + 0.01f);
+            s.transform.localScale = scale;
+            s.GetComponent<Renderer>().sharedMaterial = marking;
+        }
+        Stripe(new Vector3(-2.2f, 0f, 0f), new Vector3(1f, 0.02f, 6f));
+        Stripe(new Vector3(2.2f, 0f, 0f), new Vector3(1f, 0.02f, 6f));
+        Stripe(Vector3.zero, new Vector3(3.4f, 0.02f, 1f));
+
+        // Green edge lights so the pad is easy to find from the air.
+        for (int i = 0; i < 12; i++)
+        {
+            float a = i * Mathf.PI * 2f / 12f;
+            GameObject light = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            Object.DestroyImmediate(light.GetComponent<Collider>());
+            light.transform.SetParent(root, false);
+            light.transform.localPosition = new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a)) * (PadRadius - 0.5f) + Vector3.up * PadHeight;
+            light.transform.localScale = Vector3.one * 0.4f;
+            light.GetComponent<Renderer>().sharedMaterial = lights;
+        }
+        return root;
+    }
+
+    private static Material PadMaterial(string name, Color color, Color emission)
+    {
+        string path = $"{GeneratedFolder}/{name}.mat";
+        Material existing = AssetDatabase.LoadAssetAtPath<Material>(path);
+        if (existing != null) return existing;
+        Material material = SolidMaterial(name, color, 0.2f);
+        if (emission != Color.black)
+        {
+            material.EnableKeyword("_EMISSION");
+            material.SetColor("_EmissionColor", emission);
+        }
+        return material;
+    }
 
     private static GameObject CreateDrone(Vector3 position)
     {
