@@ -6,13 +6,19 @@ using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
 
 /// <summary>
-/// Builds the playable training scene: a real OpenStreetMap city, the carbon
-/// drone model, physical sky and lighting, a chase camera and the flight HUD.
+/// Builds the playable training scenes: one per real OpenStreetMap city in
+/// Assets/cities, each with the drone hangar models, an endless world of
+/// countryside and ocean around the city, level music, physical sky and
+/// lighting, a chase camera and the flight HUD.
 /// </summary>
 public static class SkyboundSceneBuilder
 {
     private const string DroneModelPath = "Assets/models/carbon_drone/drone/source/fly.glb";
+    private const string SecondDroneModelPath = "Assets/models/skybound_drone.glb";
     private const string MusicPath = "Assets/audio/DST-TowerDefenseTheme_1.mp3.ogg";
+    private const string LevelMusicFolder = "Assets/audio/levels";
+    private const string PeopleFolder = "Assets/models/people";
+    private const float CityHalfSize = 1600f; // city ground plane: 3.2 km square
     private const string GeneratedFolder = "Assets/Generated";
     private const float DroneSize = 1.2f;
 
@@ -29,6 +35,16 @@ public static class SkyboundSceneBuilder
     {
         var available = new System.Collections.Generic.List<(string json, string scene, string label, bool driveOnLeft)>();
         foreach (var city in Cities) if (File.Exists(city.json)) available.Add(city);
+        // Any other city file (e.g. from Skybound > Download Real City…) gets its own scene too.
+        if (Directory.Exists("Assets/cities"))
+        {
+            foreach (string file in Directory.GetFiles("Assets/cities", "*.json"))
+            {
+                string json = file.Replace('\\', '/');
+                if (available.Exists(c => c.json == json)) continue;
+                available.Add(ReadCityHeader(json));
+            }
+        }
         if (available.Count == 0)
         {
             EditorUtility.DisplayDialog("Skybound", "No city data found in Assets/cities.\n\n" +
@@ -55,6 +71,10 @@ public static class SkyboundSceneBuilder
             Material road = RoadMaterial();
             Material pavement = PavementMaterial();
             Material sky = SkyMaterial();
+            Material terrain = TerrainMaterial();
+            Material water = WaterMaterial();
+            AudioClip[] levelTracks = LoadLevelTracks();
+            (GameObject[] people, RuntimeAnimatorController[] walks) = LoadPeople();
 
             string[] sceneNames = new string[available.Count];
             string[] labels = new string[available.Count];
@@ -87,17 +107,38 @@ public static class SkyboundSceneBuilder
 
                 var traffic = new GameObject("CityLife").AddComponent<TrafficSystem>();
                 traffic.network = network;
+                traffic.personModels = people;
+                traffic.personAnimations = walks;
                 var missions = new GameObject("Missions").AddComponent<MissionSystem>();
                 missions.network = network;
                 missions.drone = drone.GetComponent<DroneController>();
                 missions.droneBase = droneBase;
+
+                var garage = new GameObject("Hangar").AddComponent<DroneGarage>();
+                garage.drone = drone.GetComponent<DroneController>();
+
+                var world = new GameObject("EndlessWorld").AddComponent<InfiniteWorld>();
+                world.drone = drone.transform;
+                world.terrainMaterial = terrain;
+                world.waterMaterial = water;
+                world.cityHalfSize = CityHalfSize;
+                world.seed = city.scene.GetHashCode();
+                world.coastDirection = Mathf.Abs(city.scene.GetHashCode() % 360); // each city has its own coastline
 
                 FlightHud hud = CreateHud(drone);
                 hud.cityName = city.label;
                 hud.missions = missions;
                 hud.citySceneNames = sceneNames;
                 hud.cityLabels = labels;
+                hud.garage = garage;
+                hud.world = world;
                 CreateMusic();
+
+                var audio = new GameObject("GameAudio").AddComponent<GameAudio>();
+                audio.missions = missions;
+                audio.drone = drone.GetComponent<DroneController>();
+                audio.freeRoamTheme = AssetDatabase.LoadAssetAtPath<AudioClip>(MusicPath);
+                audio.levelTracks = levelTracks;
 
                 EditorSceneManager.SaveScene(scene, $"Assets/Scenes/{city.scene}.unity");
             }
@@ -193,31 +234,33 @@ public static class SkyboundSceneBuilder
 
         drone.AddComponent<DroneController>();
 
-        GameObject modelPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(DroneModelPath);
-        if (modelPrefab != null)
-        {
-            GameObject model = (GameObject)PrefabUtility.InstantiatePrefab(modelPrefab);
-            model.name = "CarbonDroneModel";
-            model.transform.SetParent(drone.transform, false);
-            FitModel(model.transform);
-        }
-        else
+        // Imported hangar models; DroneGarage builds the other drones from parts at runtime.
+        if (!AddDroneModel(drone.transform, DroneModelPath, "Model_Carbon", DroneSize, true))
         {
             Debug.LogWarning($"Drone model not found at {DroneModelPath}. Make sure the glTFast " +
                              "package finished importing, then rebuild the scene.");
-            GameObject placeholder = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            placeholder.transform.SetParent(drone.transform, false);
-            placeholder.transform.localScale = new Vector3(DroneSize, 0.2f, DroneSize);
-            Object.DestroyImmediate(placeholder.GetComponent<Collider>());
         }
+        AddDroneModel(drone.transform, SecondDroneModelPath, "Model_Skybound", 1.1f, false);
 
         BoxCollider collider = drone.AddComponent<BoxCollider>();
         collider.size = new Vector3(DroneSize, 0.3f, DroneSize);
         return drone;
     }
 
-    /// <summary>Scales and centres an imported model so it is about DroneSize wide.</summary>
-    private static void FitModel(Transform model)
+    private static bool AddDroneModel(Transform drone, string path, string name, float size, bool active)
+    {
+        GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+        if (prefab == null) return false;
+        GameObject model = (GameObject)PrefabUtility.InstantiatePrefab(prefab);
+        model.name = name;
+        model.transform.SetParent(drone, false);
+        FitModel(model.transform, size);
+        model.SetActive(active);
+        return true;
+    }
+
+    /// <summary>Scales and centres an imported model so it is about `size` wide.</summary>
+    private static void FitModel(Transform model, float size)
     {
         Renderer[] renderers = model.GetComponentsInChildren<Renderer>();
         if (renderers.Length == 0) return;
@@ -227,7 +270,7 @@ public static class SkyboundSceneBuilder
         float largest = Mathf.Max(bounds.size.x, bounds.size.z);
         if (largest <= 0f) return;
 
-        float scale = DroneSize / largest;
+        float scale = size / largest;
         model.localScale = Vector3.one * scale;
         model.localPosition = -(bounds.center - model.parent.position) * scale;
     }
@@ -238,7 +281,7 @@ public static class SkyboundSceneBuilder
         Camera camera = cameraObject.AddComponent<Camera>();
         camera.fieldOfView = 70f;
         camera.nearClipPlane = 0.1f;
-        camera.farClipPlane = 3000f;
+        camera.farClipPlane = 3600f; // see mountains and ocean in the endless world
         camera.allowHDR = true;
         cameraObject.AddComponent<AudioListener>();
         cameraObject.transform.position = target.position + new Vector3(0f, 2.5f, -7f);
@@ -267,7 +310,133 @@ public static class SkyboundSceneBuilder
         source.playOnAwake = true;
     }
 
+    // ------------------------------------------------------------- city list
+
+    /// <summary>Scene name, menu label and traffic side for a downloaded city file.</summary>
+    private static (string json, string scene, string label, bool driveOnLeft) ReadCityHeader(string json)
+    {
+        string label = Path.GetFileNameWithoutExtension(json);
+        bool left = false;
+        try
+        {
+            var root = (System.Collections.Generic.Dictionary<string, object>)MiniJson.Parse(File.ReadAllText(json));
+            if (root.TryGetValue("label", out object l) && l is string ls && ls != "") label = ls;
+            else if (root.TryGetValue("place", out object p) && p is string ps && ps != "") label = ps.Split(',')[0];
+            if (root.TryGetValue("drive_on_left", out object d) && d is bool b) left = b;
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogWarning($"Could not read {json}: {e.Message}");
+        }
+        var scene = new System.Text.StringBuilder();
+        foreach (char c in label) if (char.IsLetterOrDigit(c)) scene.Append(c);
+        return (json, scene.Length > 0 ? scene.ToString() : "City", label, left);
+    }
+
+    // ------------------------------------------------------------ audio, people
+
+    /// <summary>Optional level music: Assets/audio/levels/m1_l1.ogg … m4_l3.ogg (any audio format).</summary>
+    private static AudioClip[] LoadLevelTracks()
+    {
+        var tracks = new AudioClip[MissionSystem.Catalog.Length * 3];
+        if (!AssetDatabase.IsValidFolder(LevelMusicFolder)) return tracks;
+        foreach (string guid in AssetDatabase.FindAssets("t:AudioClip", new[] { LevelMusicFolder }))
+        {
+            string path = AssetDatabase.GUIDToAssetPath(guid);
+            string name = Path.GetFileNameWithoutExtension(path).ToLowerInvariant(); // e.g. "m2_l3"
+            if (name.Length >= 5 && name[0] == 'm' && name.Contains("_l") &&
+                int.TryParse(name.Substring(1, name.IndexOf('_') - 1), out int m) &&
+                int.TryParse(name.Substring(name.IndexOf("_l") + 2), out int l) &&
+                m >= 1 && l >= 1 && l <= 3 && (m - 1) * 3 + l - 1 < tracks.Length)
+            {
+                tracks[(m - 1) * 3 + l - 1] = AssetDatabase.LoadAssetAtPath<AudioClip>(path);
+            }
+        }
+        return tracks;
+    }
+
+    /// <summary>
+    /// Optional real people: every model in Assets/models/people (FBX from Mixamo
+    /// etc.). If the file contains a walk animation it is set to loop and gets
+    /// its own animator controller.
+    /// </summary>
+    private static (GameObject[], RuntimeAnimatorController[]) LoadPeople()
+    {
+        var models = new System.Collections.Generic.List<GameObject>();
+        var walks = new System.Collections.Generic.List<RuntimeAnimatorController>();
+        if (!AssetDatabase.IsValidFolder(PeopleFolder)) return (models.ToArray(), walks.ToArray());
+
+        foreach (string guid in AssetDatabase.FindAssets("t:Model", new[] { PeopleFolder }))
+        {
+            string path = AssetDatabase.GUIDToAssetPath(guid);
+            if (AssetImporter.GetAtPath(path) is ModelImporter importer && importer.defaultClipAnimations.Length > 0)
+            {
+                ModelImporterClipAnimation[] clips = importer.clipAnimations.Length > 0 ? importer.clipAnimations : importer.defaultClipAnimations;
+                bool changed = false;
+                foreach (var clip in clips) if (!clip.loopTime) { clip.loopTime = true; changed = true; }
+                if (changed)
+                {
+                    importer.clipAnimations = clips;
+                    importer.SaveAndReimport();
+                }
+            }
+
+            GameObject model = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+            if (model == null) continue;
+            AnimationClip walk = null;
+            foreach (Object asset in AssetDatabase.LoadAllAssetsAtPath(path))
+                if (asset is AnimationClip c && !c.name.StartsWith("__preview__")) { walk = c; break; }
+
+            RuntimeAnimatorController controller = null;
+            if (walk != null)
+            {
+                string controllerPath = $"{GeneratedFolder}/Walk_{Path.GetFileNameWithoutExtension(path)}.controller";
+                controller = UnityEditor.Animations.AnimatorController.CreateAnimatorControllerAtPathWithClip(controllerPath, walk);
+            }
+            models.Add(model);
+            walks.Add(controller);
+        }
+        if (models.Count > 0) Debug.Log($"Skybound: {models.Count} people models found in {PeopleFolder}.");
+        return (models.ToArray(), walks.ToArray());
+    }
+
     // --------------------------------------------------------------- world look
+
+    private static Material TerrainMaterial()
+    {
+        Shader shader = Shader.Find("Skybound/VertexColorTerrain");
+        if (shader == null) shader = Shader.Find("Standard");
+        var material = new Material(shader) { name = "Terrain" };
+        material.SetFloat("_Glossiness", 0.05f);
+        AssetDatabase.CreateAsset(material, $"{GeneratedFolder}/Terrain.mat");
+        return material;
+    }
+
+    private static Material WaterMaterial()
+    {
+        Material material = SolidMaterial("Ocean", Color.white, 0.93f);
+        material.mainTexture = SaveTexture("Ocean", WaterTexture());
+        material.SetFloat("_Metallic", 0.1f);
+        return material;
+    }
+
+    /// <summary>One 50 m tile of soft wave pattern in deep sea blues.</summary>
+    private static Texture2D WaterTexture()
+    {
+        const int size = 256;
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, true);
+        Color deep = new Color(0.04f, 0.19f, 0.3f), light = new Color(0.1f, 0.33f, 0.45f);
+        for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            float u = x / (float)size * Mathf.PI * 2f, v = y / (float)size * Mathf.PI * 2f;
+            // Sums of whole-period waves so the tile repeats seamlessly.
+            float w = Mathf.Sin(u * 3f + Mathf.Sin(v * 2f)) * 0.5f + Mathf.Sin(v * 5f + u) * 0.3f + Mathf.Sin((u + v) * 7f) * 0.2f;
+            tex.SetPixel(x, y, Color.Lerp(deep, light, w * 0.5f + 0.5f));
+        }
+        tex.Apply();
+        return tex;
+    }
 
     private static Material SkyMaterial()
     {
@@ -300,8 +469,8 @@ public static class SkyboundSceneBuilder
         RenderSettings.fog = true;
         RenderSettings.fogMode = FogMode.Linear;
         RenderSettings.fogColor = new Color(0.72f, 0.78f, 0.85f);
-        RenderSettings.fogStartDistance = 300f;
-        RenderSettings.fogEndDistance = 2200f;
+        RenderSettings.fogStartDistance = 400f;
+        RenderSettings.fogEndDistance = 3300f;
 
         QualitySettings.shadowDistance = 450f;
         QualitySettings.shadowCascades = 4;
@@ -312,7 +481,7 @@ public static class SkyboundSceneBuilder
     {
         GameObject ground = GameObject.CreatePrimitive(PrimitiveType.Plane);
         ground.name = "Ground";
-        ground.transform.localScale = new Vector3(400f, 1f, 400f);
+        ground.transform.localScale = new Vector3(CityHalfSize / 5f, 1f, CityHalfSize / 5f); // plane is 10 m per unit
         ground.GetComponent<Renderer>().sharedMaterial = pavement;
         GameObjectUtility.SetStaticEditorFlags(ground, StaticEditorFlags.BatchingStatic);
     }
@@ -330,7 +499,7 @@ public static class SkyboundSceneBuilder
         Texture2D tex = SaveTexture("Pavement", PavementTexture());
         Material material = SolidMaterial("Pavement", Color.white, 0.15f);
         material.mainTexture = tex;
-        material.mainTextureScale = new Vector2(1000f, 1000f); // 4 m slabs across 4 km
+        material.mainTextureScale = new Vector2(CityHalfSize / 2f, CityHalfSize / 2f); // 4 m slabs
         return material;
     }
 

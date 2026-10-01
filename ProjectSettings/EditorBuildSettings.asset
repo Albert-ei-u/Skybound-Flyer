@@ -4,5 +4,14 @@
 EditorBuildSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 2
-  m_Scenes: []
+  m_Scenes:
+  - enabled: 1
+    path: Assets/Scenes/NewYork.unity
+    guid: 6a8b39b29d02dac43b555914a36b1527
+  - enabled: 1
+    path: Assets/Scenes/London.unity
+    guid: fe23a950b2c177149858059fa3932024
+  - enabled: 1
+    path: Assets/Scenes/Kigali.unity
+    guid: 86176f66f3916ad4aaf6ae84102f0a7c
   m_configObjects: {}

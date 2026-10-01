@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using static UiKit;
@@ -9,8 +10,9 @@ using static UiKit;
 /// - in flight: radar minimap with GPS route and mission blips (bottom-left),
 ///   cash and mission timer (top-right), objective subtitles (bottom),
 ///   compass, target arrow, speed/altitude and an attitude indicator;
-/// - screens: title, job select (locked missions and levels), pause, help,
-///   big map, and MISSION PASSED / WASTED banners.
+/// - screens: title, job select (locked missions and levels), hangar (swap
+///   drones), city select, pause, help, big map, and MISSION PASSED / WASTED
+///   banners. Every menu works with the arrow keys + ENTER as well as the mouse.
 /// </summary>
 public sealed class FlightHud : MonoBehaviour
 {
@@ -20,6 +22,8 @@ public sealed class FlightHud : MonoBehaviour
     [SerializeField] public string[] citySceneNames = new string[0];
     [SerializeField] public string[] cityLabels = new string[0];
     [SerializeField] private float batteryMinutes = 12f;
+    [SerializeField] public DroneGarage garage;
+    [SerializeField] public InfiniteWorld world;
 
     // Only the minimap camera renders this layer (the GPS route).
     private const int RouteLayer = 31;
@@ -41,11 +45,22 @@ public sealed class FlightHud : MonoBehaviour
     private bool bigMap;
     private readonly List<RectTransform> blips = new List<RectTransform>();
 
-    private GameObject titleScreen, jobScreen, pauseScreen, helpPanel;
-    private Transform jobList;
+    private GameObject titleScreen, jobScreen, pauseScreen, hangarScreen, cityScreen, helpPanel;
+    private GameObject returnScreen; // where ESC goes back to from the hangar / city list
+    private Transform jobList, hangarList;
     private float battery = 1f;
+    private DroneController controller;
 
-    private bool MenuOpen => titleScreen.activeSelf || jobScreen.activeSelf || pauseScreen.activeSelf;
+    // Button that gets keyboard focus when each screen opens.
+    private Selectable titleFocus, jobFocus, pauseFocus, hangarFocus, cityFocus;
+    private Text joystickTitleText, joystickPauseText, joystickPortText;
+
+    private bool MenuOpen => titleScreen.activeSelf || jobScreen.activeSelf || pauseScreen.activeSelf ||
+                             hangarScreen.activeSelf || cityScreen.activeSelf;
+
+    private GameObject OpenScreen =>
+        titleScreen.activeSelf ? titleScreen : jobScreen.activeSelf ? jobScreen : pauseScreen.activeSelf ? pauseScreen :
+        hangarScreen.activeSelf ? hangarScreen : cityScreen.activeSelf ? cityScreen : null;
 
     private void Start()
     {
@@ -62,6 +77,10 @@ public sealed class FlightHud : MonoBehaviour
             Debug.LogError("This scene has no missions. Run Skybound > Create Drone Training Scene, then open Assets/Scenes/NewYork.");
         }
 
+        if (garage == null) garage = FindFirstObjectByType<DroneGarage>();
+        if (world == null) world = FindFirstObjectByType<InfiniteWorld>();
+        if (drone != null) controller = drone.GetComponent<DroneController>();
+
         Canvas hud = CreateCanvas(transform, "HUD", 0);
         hudRoot = hud.transform;
         BuildCompass(hudRoot);
@@ -76,19 +95,37 @@ public sealed class FlightHud : MonoBehaviour
         BuildTitle(menus.transform);
         BuildJobs(menus.transform);
         BuildPause(menus.transform);
+        BuildHangar(menus.transform);
+        BuildCities(menus.transform);
 
         if (missions != null)
         {
             missions.Banner += OnBanner;
             missions.Finished += () => ShowScreen(jobScreen);
         }
+        if (controller != null)
+        {
+            // In free roam a crash (or splash) shows WASTED and respawns at the base, GTA-style.
+            controller.Crashed += reason =>
+            {
+                if ((missions != null && missions.Active) || IsInvoking(nameof(Respawn))) return; // the job handles it
+                OnBanner("WASTED", reason, false);
+                Invoke(nameof(Respawn), 2.5f);
+            };
+        }
         ShowScreen(titleScreen);
+    }
+
+    private void Respawn()
+    {
+        if (controller != null) controller.ResetDrone();
     }
 
     private void Update()
     {
         if (titleScreen == null) return; // redirected to another scene
         HandleKeys();
+        UpdateJoystickLabels();
         if (drone == null) return;
         UpdateInstruments();
         UpdateMission();
@@ -99,13 +136,22 @@ public sealed class FlightHud : MonoBehaviour
 
     private void HandleKeys()
     {
-        bool enter = Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter);
-        if (titleScreen.activeSelf && enter) ShowScreen(jobScreen);
-        else if (pauseScreen.activeSelf && enter) ShowScreen(null);
+        // Menus: arrow keys move between buttons, ENTER presses the highlighted one
+        // (handled by the EventSystem). If the mouse cleared the highlight, the
+        // next arrow / ENTER press puts it back instead of doing nothing.
+        if (MenuOpen)
+        {
+            GameObject selected = EventSystem.current != null ? EventSystem.current.currentSelectedGameObject : null;
+            bool navKey = Input.GetKeyDown(KeyCode.UpArrow) || Input.GetKeyDown(KeyCode.DownArrow) ||
+                          Input.GetKeyDown(KeyCode.LeftArrow) || Input.GetKeyDown(KeyCode.RightArrow) ||
+                          Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter) || Input.GetKeyDown(KeyCode.Tab);
+            if (navKey && (selected == null || !selected.activeInHierarchy)) FocusDefault();
+        }
 
         if (Input.GetKeyDown(KeyCode.Escape))
         {
-            if (jobScreen.activeSelf || pauseScreen.activeSelf) ShowScreen(null);
+            if (hangarScreen.activeSelf || cityScreen.activeSelf) ShowScreen(returnScreen);
+            else if (jobScreen.activeSelf || pauseScreen.activeSelf) ShowScreen(null);
             else if (!titleScreen.activeSelf) ShowScreen(pauseScreen);
         }
         if (!MenuOpen)
@@ -122,12 +168,40 @@ public sealed class FlightHud : MonoBehaviour
         titleScreen.SetActive(screen == titleScreen);
         jobScreen.SetActive(screen == jobScreen);
         pauseScreen.SetActive(screen == pauseScreen);
+        hangarScreen.SetActive(screen == hangarScreen);
+        cityScreen.SetActive(screen == cityScreen);
         if (screen == jobScreen) RefreshJobs();
+        if (screen == hangarScreen) RefreshHangar();
         helpPanel.SetActive(screen == titleScreen);
         hudRoot.gameObject.SetActive(screen == null || screen == pauseScreen);
         Time.timeScale = screen == null ? 1f : 0f;
         Cursor.visible = screen != null;
         Cursor.lockState = CursorLockMode.None;
+        if (EventSystem.current != null) EventSystem.current.SetSelectedGameObject(null);
+        FocusDefault();
+    }
+
+    /// <summary>Opens the hangar or city list, remembering where ESC should return.</summary>
+    private void OpenSubScreen(GameObject screen)
+    {
+        returnScreen = OpenScreen == pauseScreen ? pauseScreen : jobScreen;
+        ShowScreen(screen);
+    }
+
+    private void FocusDefault()
+    {
+        GameObject screen = OpenScreen;
+        Selectable focus = screen == titleScreen ? titleFocus : screen == jobScreen ? jobFocus : screen == pauseScreen ? pauseFocus
+                         : screen == hangarScreen ? hangarFocus : screen == cityScreen ? cityFocus : null;
+        if (focus != null && EventSystem.current != null) EventSystem.current.SetSelectedGameObject(focus.gameObject);
+    }
+
+    private void UpdateJoystickLabels()
+    {
+        if (controller == null) return;
+        string status = controller.JoystickStatus;
+        if (joystickTitleText != null && titleScreen.activeSelf) joystickTitleText.text = status;
+        if (joystickPauseText != null && pauseScreen.activeSelf) joystickPauseText.text = status;
     }
 
     // --------------------------------------------------------------- update
@@ -159,6 +233,7 @@ public sealed class FlightHud : MonoBehaviour
 
         statusText.text = altitude > 120f ? "<color=#ffcc00>ABOVE 120 m LEGAL CEILING</color>"
                         : battery < 0.15f ? "<color=#ff5555>LOW BATTERY — LAND NOW</color>"
+                        : world != null ? world.RegionName(t.position, cityName.ToUpperInvariant())
                         : cityName.ToUpperInvariant();
     }
 
@@ -460,7 +535,9 @@ public sealed class FlightHud : MonoBehaviour
         title.color = Gold;
         title.gameObject.AddComponent<UnityEngine.UI.Outline>().effectColor = Color.black;
         Label(t, $"DRONE CITY  ·  {cityName.ToUpperInvariant()}", 26, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0f, 250f), new Vector2(1200f, 40f));
-        UiKit.Button(t, "PRESS ENTER  ·  CHOOSE A JOB", new Vector2(0.5f, 0f), new Vector2(0f, 90f), new Vector2(460f, 56f), new Color(0.75f, 0.55f, 0.05f), () => ShowScreen(jobScreen));
+        titleFocus = UiKit.Button(t, "PRESS ENTER  ·  CHOOSE A JOB", new Vector2(0.5f, 0f), new Vector2(0f, 90f), new Vector2(460f, 56f), new Color(0.75f, 0.55f, 0.05f), () => ShowScreen(jobScreen));
+        joystickTitleText = Label(t, "", 16, TextAnchor.MiddleCenter, new Vector2(0.5f, 0f), new Vector2(0f, 40f), new Vector2(800f, 24f));
+        joystickTitleText.color = new Color(1f, 1f, 1f, 0.7f);
     }
 
     private void BuildJobs(Transform root)
@@ -476,39 +553,34 @@ public sealed class FlightHud : MonoBehaviour
         jobList = new GameObject("JobList", typeof(RectTransform)).transform;
         jobList.SetParent(t, false);
 
-        UiKit.Button(t, "FREE ROAM", new Vector2(0.5f, 0f), new Vector2(-340f, 70f), new Vector2(260f, 52f), new Color(0.2f, 0.25f, 0.3f), () =>
+        freeRoamButton = UiKit.Button(t, "FREE ROAM", new Vector2(0.5f, 0f), new Vector2(-420f, 70f), new Vector2(260f, 52f), new Color(0.2f, 0.25f, 0.3f), () =>
         {
             missions?.Abort();
             ShowScreen(null);
         });
-        UiKit.Button(t, "RESET PROGRESS", new Vector2(0.5f, 0f), new Vector2(-60f, 70f), new Vector2(260f, 52f), new Color(0.45f, 0.1f, 0.1f), () =>
+        UiKit.Button(t, "HANGAR · DRONES", new Vector2(0.5f, 0f), new Vector2(-140f, 70f), new Vector2(260f, 52f), new Color(0.1f, 0.35f, 0.45f), () => OpenSubScreen(hangarScreen));
+        UiKit.Button(t, $"CITY · {cityName.ToUpperInvariant()}", new Vector2(0.5f, 0f), new Vector2(140f, 70f), new Vector2(260f, 52f), new Color(0.1f, 0.4f, 0.28f), () => OpenSubScreen(cityScreen));
+        UiKit.Button(t, "RESET PROGRESS", new Vector2(0.5f, 0f), new Vector2(420f, 70f), new Vector2(260f, 52f), new Color(0.45f, 0.1f, 0.1f), () =>
         {
             missions?.ResetProgress();
             RefreshJobs();
+            FocusDefault();
         });
-        // City switch
-        for (int i = 0; i < citySceneNames.Length; i++)
-        {
-            string scene = citySceneNames[i];
-            UiKit.Button(t, cityLabels[i].ToUpperInvariant(), new Vector2(0.5f, 0f), new Vector2(220f + i * 180f, 70f), new Vector2(170f, 52f),
-                         cityLabels[i] == cityName ? new Color(0.1f, 0.45f, 0.3f) : new Color(0.15f, 0.2f, 0.28f), () =>
-            {
-                Time.timeScale = 1f;
-                SceneManager.LoadScene(scene);
-            });
-        }
         cashLabelOnJobs = Label(t, "", 40, TextAnchor.MiddleRight, new Vector2(1f, 1f), new Vector2(-200f, -80f), new Vector2(400f, 60f));
         cashLabelOnJobs.color = Money;
         cashLabelOnJobs.fontStyle = FontStyle.Bold;
     }
 
     private Text cashLabelOnJobs;
+    private Button freeRoamButton;
 
     /// <summary>Rebuilds the mission cards so lock states reflect saved progress.</summary>
     private void RefreshJobs()
     {
         foreach (Transform child in jobList) Destroy(child.gameObject);
         if (missions != null) cashLabelOnJobs.text = $"${missions.Cash:N0}";
+        jobFocus = freeRoamButton;
+        bool focusIsNewLevel = false;
 
         var catalog = MissionSystem.Catalog;
         const float cardW = 400f, cardH = 560f, gap = 30f;
@@ -555,6 +627,12 @@ public sealed class FlightHud : MonoBehaviour
                     missions.StartMission(mission, lvl);
                 });
                 button.interactable = open;
+                // Focus the first level still to beat, otherwise the first playable one.
+                if (open && !focusIsNewLevel && (!complete || jobFocus == freeRoamButton))
+                {
+                    jobFocus = button;
+                    focusIsNewLevel = !complete;
+                }
             }
         }
     }
@@ -566,19 +644,150 @@ public sealed class FlightHud : MonoBehaviour
         Text title = Label(t, "PAUSED", 72, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0f, 220f), new Vector2(800f, 90f));
         title.fontStyle = FontStyle.BoldAndItalic;
         title.color = Gold;
-        UiKit.Button(t, "RESUME", new Vector2(0.5f, 0.5f), new Vector2(0f, 90f), new Vector2(380f, 58f), new Color(0.75f, 0.55f, 0.05f), () => ShowScreen(null));
-        UiKit.Button(t, "JOBS", new Vector2(0.5f, 0.5f), new Vector2(0f, 20f), new Vector2(380f, 58f), new Color(0.15f, 0.2f, 0.28f), () => ShowScreen(jobScreen));
-        UiKit.Button(t, "RESET DRONE", new Vector2(0.5f, 0.5f), new Vector2(0f, -50f), new Vector2(380f, 58f), new Color(0.15f, 0.2f, 0.28f), () =>
+        pauseFocus = UiKit.Button(t, "RESUME", new Vector2(0.5f, 0.5f), new Vector2(0f, 130f), new Vector2(380f, 58f), new Color(0.75f, 0.55f, 0.05f), () => ShowScreen(null));
+        UiKit.Button(t, "JOBS", new Vector2(0.5f, 0.5f), new Vector2(0f, 60f), new Vector2(380f, 58f), new Color(0.15f, 0.2f, 0.28f), () => ShowScreen(jobScreen));
+        UiKit.Button(t, "HANGAR · CHANGE DRONE", new Vector2(0.5f, 0.5f), new Vector2(0f, -10f), new Vector2(380f, 58f), new Color(0.15f, 0.2f, 0.28f), () => OpenSubScreen(hangarScreen));
+        UiKit.Button(t, "RESET DRONE", new Vector2(0.5f, 0.5f), new Vector2(0f, -80f), new Vector2(380f, 58f), new Color(0.15f, 0.2f, 0.28f), () =>
         {
             drone.GetComponent<DroneController>().ResetDrone();
             ShowScreen(null);
         });
-        UiKit.Button(t, "CONTROLS", new Vector2(0.5f, 0.5f), new Vector2(0f, -120f), new Vector2(380f, 58f), new Color(0.15f, 0.2f, 0.28f), () => helpPanel.SetActive(!helpPanel.activeSelf));
+        Button port = UiKit.Button(t, "", new Vector2(0.5f, 0.5f), new Vector2(0f, -150f), new Vector2(380f, 58f), new Color(0.15f, 0.2f, 0.28f), CycleJoystickPort);
+        joystickPortText = port.GetComponentInChildren<Text>();
+        joystickPortText.text = PortLabel();
+        UiKit.Button(t, "CONTROLS", new Vector2(0.5f, 0.5f), new Vector2(0f, -220f), new Vector2(380f, 58f), new Color(0.15f, 0.2f, 0.28f), () => helpPanel.SetActive(!helpPanel.activeSelf));
+        joystickPauseText = Label(t, "", 17, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0f, -275f), new Vector2(800f, 26f));
+        joystickPauseText.color = Accent;
+    }
+
+    private static string PortLabel()
+    {
+        string port = PlayerPrefs.GetString(DroneController.PortPref, "");
+        return $"JOYSTICK PORT:  {(port == "" ? "AUTO" : port)}";
+    }
+
+    /// <summary>AUTO → COM3 → COM5 → … → AUTO. Saved, and the joystick reconnects at once.</summary>
+    private void CycleJoystickPort()
+    {
+        var options = new List<string> { "" };
+        try { options.AddRange(System.IO.Ports.SerialPort.GetPortNames()); }
+        catch (System.Exception) { /* serial ports unavailable on this platform */ }
+        options.Sort((a, b) => a == "" ? -1 : b == "" ? 1 : string.CompareOrdinal(a, b));
+
+        string current = PlayerPrefs.GetString(DroneController.PortPref, "");
+        int index = options.IndexOf(current);
+        string next = options[(index + 1) % options.Count];
+        PlayerPrefs.SetString(DroneController.PortPref, next);
+        PlayerPrefs.Save();
+        joystickPortText.text = PortLabel();
+        controller?.ReconnectJoystick();
+    }
+
+    // -------------------------------------------------------------- hangar
+
+    private void BuildHangar(Transform root)
+    {
+        hangarScreen = MakeScreen(root, "HangarScreen", 0.85f);
+        Transform t = hangarScreen.transform;
+        Text header = Label(t, "HANGAR", 64, TextAnchor.MiddleLeft, new Vector2(0f, 1f), new Vector2(360f, -80f), new Vector2(600f, 80f));
+        header.fontStyle = FontStyle.BoldAndItalic;
+        header.color = Gold;
+        Label(t, "Pick the drone you want to fly. ← → to browse, ENTER to choose, ESC to go back.", 20,
+              TextAnchor.MiddleLeft, new Vector2(0f, 1f), new Vector2(560f, -135f), new Vector2(1000f, 30f)).color = new Color(1f, 1f, 1f, 0.7f);
+        hangarList = new GameObject("HangarList", typeof(RectTransform)).transform;
+        hangarList.SetParent(t, false);
+        UiKit.Button(t, "BACK", new Vector2(0.5f, 0f), new Vector2(0f, 70f), new Vector2(260f, 52f), new Color(0.2f, 0.25f, 0.3f), () => ShowScreen(returnScreen));
+    }
+
+    private void RefreshHangar()
+    {
+        foreach (Transform child in hangarList) Destroy(child.gameObject);
+        var catalog = DroneGarage.Catalog;
+        int selected = garage != null ? garage.Selected : 0;
+        const float cardW = 330f, cardH = 520f, gap = 20f;
+        float startX = -(catalog.Length - 1) * (cardW + gap) / 2f;
+        for (int i = 0; i < catalog.Length; i++)
+        {
+            var spec = catalog[i];
+            bool inUse = i == selected;
+            RectTransform card = Panel(hangarList, "Card", new Vector2(0.5f, 0.5f), new Vector2(startX + i * (cardW + gap), 10f),
+                                       new Vector2(cardW, cardH), new Color(0.06f, 0.1f, 0.14f, 0.95f));
+            UiKit.Outline(card, inUse ? Gold : new Color(1f, 1f, 1f, 0.15f));
+            Panel(card, "Paint", new Vector2(0.5f, 1f), new Vector2(0f, -4f), new Vector2(cardW, 8f), spec.Paint);
+
+            Text name = Label(card, spec.Name, 28, TextAnchor.MiddleLeft, new Vector2(0f, 1f), new Vector2(cardW / 2f, -45f), new Vector2(cardW - 40f, 40f));
+            name.fontStyle = FontStyle.Bold;
+            Label(card, $"{spec.Arms} ROTORS  ·  {spec.Mass:0.0} kg", 15, TextAnchor.MiddleLeft, new Vector2(0f, 1f), new Vector2(cardW / 2f, -80f), new Vector2(cardW - 40f, 22f)).color = Accent;
+            Text desc = Label(card, spec.Description, 17, TextAnchor.UpperLeft, new Vector2(0f, 1f), new Vector2(cardW / 2f, -140f), new Vector2(cardW - 40f, 80f));
+            desc.horizontalOverflow = HorizontalWrapMode.Wrap;
+            desc.color = new Color(1f, 1f, 1f, 0.8f);
+
+            // Handling bars.
+            (string, float)[] stats =
+            {
+                ("SPEED", spec.Cruise / 50f), ("AGILITY", spec.Turn / 110f),
+                ("CLIMB", spec.Lift / 30f), ("STABILITY", spec.Mass / 3f),
+            };
+            for (int k = 0; k < stats.Length; k++)
+            {
+                float y = -215f - k * 44f;
+                Label(card, stats[k].Item1, 14, TextAnchor.MiddleLeft, new Vector2(0f, 1f), new Vector2(cardW / 2f, y), new Vector2(cardW - 40f, 20f)).color = new Color(1f, 1f, 1f, 0.6f);
+                Panel(card, "Bar", new Vector2(0f, 1f), new Vector2(cardW / 2f, y - 18f), new Vector2(cardW - 40f, 8f), new Color(1f, 1f, 1f, 0.12f));
+                float w = (cardW - 40f) * Mathf.Clamp01(stats[k].Item2);
+                Panel(card, "Fill", new Vector2(0f, 1f), new Vector2(20f + w / 2f, y - 18f), new Vector2(w, 8f), Gold);
+            }
+
+            int index = i;
+            Button button = UiKit.Button(card, inUse ? "IN USE" : "FLY THIS DRONE", new Vector2(0.5f, 0f), new Vector2(0f, 50f), new Vector2(cardW - 50f, 58f),
+                                         inUse ? new Color(0.12f, 0.4f, 0.2f) : new Color(0.75f, 0.55f, 0.05f), () =>
+            {
+                garage?.Select(index);
+                RefreshHangar();
+                FocusDefault();
+            });
+            if (inUse) hangarFocus = button;
+        }
+    }
+
+    // -------------------------------------------------------------- cities
+
+    private void BuildCities(Transform root)
+    {
+        cityScreen = MakeScreen(root, "CityScreen", 0.85f);
+        Transform t = cityScreen.transform;
+        Text header = Label(t, "CITIES", 64, TextAnchor.MiddleLeft, new Vector2(0f, 1f), new Vector2(360f, -80f), new Vector2(600f, 80f));
+        header.fontStyle = FontStyle.BoldAndItalic;
+        header.color = Gold;
+        Label(t, "Real cities from OpenStreetMap. Fly out of town for endless countryside, mountains and ocean.", 20,
+              TextAnchor.MiddleLeft, new Vector2(0f, 1f), new Vector2(560f, -135f), new Vector2(1000f, 30f)).color = new Color(1f, 1f, 1f, 0.7f);
+
+        const int columns = 3;
+        const float w = 380f, h = 70f, gap = 24f;
+        int rows = Mathf.Max(1, Mathf.CeilToInt(citySceneNames.Length / (float)columns));
+        for (int i = 0; i < citySceneNames.Length; i++)
+        {
+            string scene = citySceneNames[i];
+            int col = i % columns, row = i / columns;
+            int inRow = Mathf.Min(columns, citySceneNames.Length - row * columns);
+            float x = (col - (inRow - 1) / 2f) * (w + gap);
+            float y = ((rows - 1) / 2f - row) * (h + gap) + 40f;
+            bool here = i < cityLabels.Length && cityLabels[i] == cityName;
+            Button button = UiKit.Button(t, (i < cityLabels.Length ? cityLabels[i] : scene).ToUpperInvariant() + (here ? "   ·   YOU ARE HERE" : ""),
+                                         new Vector2(0.5f, 0.5f), new Vector2(x, y), new Vector2(w, h),
+                                         here ? new Color(0.1f, 0.45f, 0.3f) : new Color(0.15f, 0.2f, 0.28f), () =>
+            {
+                Time.timeScale = 1f;
+                SceneManager.LoadScene(scene);
+            });
+            if (here || cityFocus == null) cityFocus = button;
+        }
+        Button back = UiKit.Button(t, "BACK", new Vector2(0.5f, 0f), new Vector2(0f, 70f), new Vector2(260f, 52f), new Color(0.2f, 0.25f, 0.3f), () => ShowScreen(returnScreen));
+        if (cityFocus == null) cityFocus = back;
     }
 
     private void BuildHelp(Transform root)
     {
-        RectTransform panel = Panel(root, "HowToPlay", new Vector2(0f, 0.5f), new Vector2(330f, -40f), new Vector2(560f, 440f), new Color(0.03f, 0.07f, 0.1f, 0.94f));
+        RectTransform panel = Panel(root, "HowToPlay", new Vector2(0f, 0.5f), new Vector2(330f, -40f), new Vector2(560f, 470f), new Color(0.03f, 0.07f, 0.1f, 0.94f));
         UiKit.Outline(panel, new Color(Accent.r, Accent.g, Accent.b, 0.5f));
         helpPanel = panel.gameObject;
         Text title = Label(panel, "HOW TO PLAY", 26, TextAnchor.MiddleCenter, new Vector2(0.5f, 1f), new Vector2(0f, -28f), new Vector2(520f, 36f));
@@ -596,7 +805,8 @@ public sealed class FlightHud : MonoBehaviour
             { "M", "Big map" },
             { "R", "Reset drone" },
             { "H", "Show / hide this guide" },
-            { "ESC", "Pause" },
+            { "ESC", "Pause / back" },
+            { "← ↑ → ↓", "Move in menus, ENTER to choose" },
         };
         for (int i = 0; i < rows.GetLength(0); i++)
         {

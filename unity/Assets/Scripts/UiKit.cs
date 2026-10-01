@@ -88,10 +88,21 @@ public static class UiKit
         ColorBlock colors = button.colors;
         colors.highlightedColor = new Color(1.25f, 1.25f, 1.25f);
         colors.pressedColor = new Color(0.8f, 0.8f, 0.8f);
+        colors.selectedColor = new Color(1.35f, 1.35f, 1.35f);
         colors.disabledColor = new Color(0.55f, 0.55f, 0.55f, 0.8f);
         button.colors = colors;
         if (onClick != null) button.onClick.AddListener(() => onClick());
         Label(rect, text, 20, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), Vector2.zero, size).fontStyle = FontStyle.Bold;
+
+        // Gold frame shown while the button has keyboard focus (arrow keys + ENTER).
+        RectTransform frame = Panel(rect, "Focus", new Vector2(0.5f, 0.5f), Vector2.zero, size + new Vector2(10f, 10f), Color.clear);
+        frame.SetAsFirstSibling();
+        var focus = rect.gameObject.AddComponent<FocusFrame>();
+        focus.frame = frame.gameObject;
+        foreach (var side in new[] { (new Vector2(0.5f, 1f), new Vector2(size.x + 10f, 4f)), (new Vector2(0.5f, 0f), new Vector2(size.x + 10f, 4f)),
+                                     (new Vector2(0f, 0.5f), new Vector2(4f, size.y + 10f)), (new Vector2(1f, 0.5f), new Vector2(4f, size.y + 10f)) })
+            Panel(frame, "Edge", side.Item1, Vector2.zero, side.Item2, Gold);
+        frame.gameObject.SetActive(false);
         return button;
     }
 
@@ -124,4 +135,24 @@ public static class UiKit
         white = Sprite.Create(Texture2D.whiteTexture, new Rect(0, 0, 4, 4), new Vector2(0.5f, 0.5f));
         return white;
     }
+}
+
+/// <summary>Shows a button's focus frame while it is selected (keyboard / joystick navigation).</summary>
+public sealed class FocusFrame : MonoBehaviour, ISelectHandler, IDeselectHandler
+{
+    public GameObject frame;
+
+    public void OnSelect(BaseEventData eventData)
+    {
+        if (frame != null) frame.SetActive(true);
+        transform.localScale = Vector3.one * 1.04f;
+    }
+
+    public void OnDeselect(BaseEventData eventData)
+    {
+        if (frame != null) frame.SetActive(false);
+        transform.localScale = Vector3.one;
+    }
+
+    private void OnDisable() => OnDeselect(null);
 }

@@ -56,6 +56,9 @@ public sealed class MissionSystem : MonoBehaviour
     /// <summary>Raised with (headline, detail, success) for the big banner.</summary>
     public event System.Action<string, string, bool> Banner;
 
+    /// <summary>Raised whenever a ring, pickup, drop-off or the pad is reached.</summary>
+    public event System.Action TargetReached;
+
     /// <summary>Raised after a job is passed, so the HUD can reopen the job list.</summary>
     public event System.Action Finished;
 
@@ -93,7 +96,7 @@ public sealed class MissionSystem : MonoBehaviour
     {
         if (drone != null)
         {
-            drone.Crashed += () => Fail("WASTED", "The drone crashed.");
+            drone.Crashed += reason => Fail("WASTED", reason);
             droneBody = drone.GetComponent<Rigidbody>();
             drone.WasReset += OnDroneReset;
         }
@@ -269,6 +272,7 @@ public sealed class MissionSystem : MonoBehaviour
     {
         Destroy(targets[0].gameObject);
         targets.RemoveAt(0);
+        TargetReached?.Invoke();
 
         if (targets.Count == 0)
         {

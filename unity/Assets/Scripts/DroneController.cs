@@ -27,8 +27,8 @@ public sealed class DroneController : MonoBehaviour
     [SerializeField] private string joystickPort = "";
     [SerializeField] private bool useJoystick = true;
 
-    /// <summary>Raised when the drone hits something faster than crashImpactSpeed.</summary>
-    public event System.Action Crashed;
+    /// <summary>Raised with a reason when the drone crashes (hard impact, ocean).</summary>
+    public event System.Action<string> Crashed;
 
     /// <summary>Raised after the drone is put back on its start point (R, joystick button, pause menu).</summary>
     public event System.Action WasReset;
@@ -38,6 +38,31 @@ public sealed class DroneController : MonoBehaviour
     private Quaternion startRotation;
     private ArduinoJoystick joystick;
     private System.Threading.Tasks.Task<ArduinoJoystick> joystickConnect;
+    private bool grounded = true; // motors idle while resting on the ground
+    private float lastLiftInput;
+    private bool reconnectPending;
+
+    /// <summary>PlayerPrefs key for the joystick port chosen in the pause menu ("" = auto).</summary>
+    public const string PortPref = "skybound_joystick_port";
+
+    public bool Grounded => grounded;
+
+    /// <summary>One-line joystick state for the menus.</summary>
+    public string JoystickStatus =>
+        joystick != null && joystick.Connected ? $"Joystick connected on {joystick.PortName}"
+        : joystickConnect != null ? "Searching for the Arduino joystick…"
+        : "No joystick found (keyboard only)";
+
+    /// <summary>Handling of the drone picked in the hangar.</summary>
+    public void Configure(float lift, float cruise, float turn, float braking, float mass)
+    {
+        liftForce = lift;
+        cruiseForce = cruise;
+        turnRate = turn;
+        brakingForce = braking;
+        if (body == null) body = GetComponent<Rigidbody>();
+        body.mass = mass;
+    }
 
     private void Awake()
     {
@@ -50,11 +75,27 @@ public sealed class DroneController : MonoBehaviour
     private void OnEnable()
     {
         // Search serial ports off the main thread so startup never freezes.
-        if (useJoystick && joystick == null && joystickConnect == null)
+        if (useJoystick && joystick == null && joystickConnect == null) ConnectJoystick();
+    }
+
+    private void ConnectJoystick()
+    {
+        // The port picked in the pause menu wins over the Inspector field.
+        string portName = PlayerPrefs.HasKey(PortPref) ? PlayerPrefs.GetString(PortPref) : joystickPort;
+        joystickConnect = System.Threading.Tasks.Task.Run(() => ArduinoJoystick.Open(portName));
+    }
+
+    /// <summary>Drops the current joystick and searches again (after the port setting changes).</summary>
+    public void ReconnectJoystick()
+    {
+        if (joystickConnect != null)
         {
-            string portName = joystickPort;
-            joystickConnect = System.Threading.Tasks.Task.Run(() => ArduinoJoystick.Open(portName));
+            reconnectPending = true; // wait for the running search to release its port
+            return;
         }
+        joystick?.Dispose();
+        joystick = null;
+        ConnectJoystick();
     }
 
     private void OnDisable()
@@ -83,9 +124,13 @@ public sealed class DroneController : MonoBehaviour
             braking |= joystick.Throttle < -0.5f || joystick.Brake;
         }
 
+        lastLiftInput = liftInput;
+        if (liftInput > 0f) grounded = false;
+
         // Hover assist: cancel gravity so the drone holds altitude when no
-        // climb/descend key is pressed.
-        body.AddForce(-Physics.gravity * body.mass, ForceMode.Force);
+        // climb/descend key is pressed. On the ground the motors idle, so
+        // gravity keeps the drone sitting on the pad until you climb.
+        if (!grounded) body.AddForce(-Physics.gravity * body.mass, ForceMode.Force);
         body.AddForce(Vector3.up * liftInput * liftForce, ForceMode.Force);
 
         // Real drones limit vertical speed (about 6 m/s up, 5 m/s down),
@@ -139,7 +184,12 @@ public sealed class DroneController : MonoBehaviour
         {
             joystick = joystickConnect.Status == System.Threading.Tasks.TaskStatus.RanToCompletion ? joystickConnect.Result : null;
             joystickConnect = null;
-            if (joystick == null) Debug.Log("No Arduino joystick found; using keyboard.");
+            if (reconnectPending)
+            {
+                reconnectPending = false;
+                ReconnectJoystick();
+            }
+            else if (joystick == null) Debug.Log("No Arduino joystick found; using keyboard.");
         }
 
         if (Input.GetKeyDown(KeyCode.R) || (joystick != null && joystick.ConsumeResetPress()))
@@ -150,8 +200,27 @@ public sealed class DroneController : MonoBehaviour
 
     private void OnCollisionEnter(Collision collision)
     {
-        if (collision.relativeVelocity.magnitude > crashImpactSpeed) Crashed?.Invoke();
+        if (collision.relativeVelocity.magnitude > crashImpactSpeed) Crash("The drone crashed.");
+        CheckTouchdown(collision);
     }
+
+    private void OnCollisionStay(Collision collision) => CheckTouchdown(collision);
+
+    // Resting on something below with no climb input counts as landed.
+    private void CheckTouchdown(Collision collision)
+    {
+        if (lastLiftInput > 0f) return;
+        for (int i = 0; i < collision.contactCount; i++)
+        {
+            if (collision.GetContact(i).normal.y > 0.7f)
+            {
+                grounded = true;
+                return;
+            }
+        }
+    }
+
+    public void Crash(string reason) => Crashed?.Invoke(reason);
 
     public void ResetDrone()
     {
@@ -159,6 +228,7 @@ public sealed class DroneController : MonoBehaviour
         transform.rotation = resetPoint != null ? resetPoint.rotation : startRotation;
         body.linearVelocity = Vector3.zero;
         body.angularVelocity = Vector3.zero;
+        grounded = true;
         WasReset?.Invoke();
     }
 
