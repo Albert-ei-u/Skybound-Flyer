@@ -2,7 +2,53 @@
 
 Skybound is a Unity 6 / C# drone familiarisation simulator. It builds real
 cities from OpenStreetMap data and includes traffic, pedestrians, missions,
-checkpoints, scoring, and level progression.
+checkpoints, scoring, and level progression. Around each city is an endless
+world of countryside, mountains and ocean, there is a hangar of five drones
+to choose from, every level has its own music, and the drone can be flown
+with the keyboard or a home-made Arduino joystick.
+
+## Getting started
+
+1. Install **Unity 6** (6000.6.3f1) with Unity Hub and open this folder as a
+   project. Wait for the first import and compile to finish.
+2. In the menu bar choose **Skybound > Create Drone Training Scene**. This
+   builds one playable scene per city (New York, London, Kigali and any city
+   you downloaded). Run it again whenever you add cities, music or people
+   models.
+3. Optional: **Skybound > Download Real City…** to add more real cities
+   (Paris, Tokyo, Dubai, … or any coordinates), then rebuild the scenes.
+4. Open `Assets/Scenes/NewYork.unity` (or another city) and press **Play**.
+5. Click inside the Game view so it receives the keyboard.
+6. Optional: plug in the Arduino joystick (see [Arduino joystick](#arduino-joystick)).
+
+## Playing the game
+
+1. **Title screen.** Press **ENTER** to open the job list.
+2. **Jobs screen.** Use the **arrow keys** to move between buttons and
+   **ENTER** to choose (the mouse works too):
+   - a **LEVEL** button starts that job;
+   - **FREE ROAM** lets you fly anywhere with no timer;
+   - **HANGAR · DRONES** swaps your drone;
+   - **CITY** switches to another real city;
+   - **RESET PROGRESS** clears your saved levels and cash.
+3. **Take off.** The drone sits on the green helipad (the drone base). Hold
+   **↑** to climb; the mission clock only starts once you leave the pad.
+4. **Fly the job.** Follow the yellow arrow under the compass and the purple
+   GPS route on the radar. Fly through **blue rings**, or hover inside
+   **yellow markers** for a second to pick up / deliver.
+5. **Return to base.** Every job ends by flying back to the green marker
+   and landing gently on the helipad (hold **↓**, come to a stop).
+6. **MISSION PASSED** pays cash and unlocks the next level. Running out of
+   time or crashing shows **WASTED** and the level restarts from the base.
+7. **Explore.** In free roam, fly out of the city to reach hills, snowy
+   mountains, beaches and the open ocean. Do not touch the water - it counts
+   as a crash and you respawn at the base.
+8. **Pause** with **ESC**: resume, jobs, hangar, reset the drone, choose the
+   joystick port, or show the controls. Press **H** any time for the guide
+   and **M** for the big map.
+
+Watch the **battery bar** under the radar and the **120 m legal ceiling**
+warning, like a real drone pilot.
 
 ## Project layout
 
@@ -108,19 +154,18 @@ Sketch location:
 arduino/flight_joystick/flight_joystick.ino
 ```
 
-1. Plug the Arduino Uno in with its USB cable.
-2. In the Arduino IDE open the sketch, choose **Tools > Board > Arduino Uno**
-   and **Tools > Port > COMx** (the port you were given; it is the one that
-   appears when you plug the board in).
-3. Click **Upload**. To check the wiring, open **Tools > Serial Monitor** at
-   **115200 baud**: lines like `512,509,515,520,0,0,0` should change as you
-   move the sticks. **Close the Serial Monitor afterwards** - only one
-   program can use the port, and Unity cannot connect while it is open.
-4. In Unity press Play. The game finds the Arduino by itself; the title and
-   pause screens show "Joystick connected on COMx". If it does not, open the
-   pause menu (ESC) and press **JOYSTICK PORT** until it shows your port: it
-   is saved and reconnects at once. (Player Settings > Api Compatibility
-   Level must stay on **.NET Framework** for serial ports.)
+1. Wire the HC-05/HC-06 and joystick modules as shown below, then power the
+   Arduino. Upload the sketch over USB with **Tools > Board > Arduino Uno**.
+2. Pair the computer with the Bluetooth module in Windows Bluetooth settings
+   (PIN is commonly `1234` or `0000`). Note the **outgoing COM port** created
+   by the pairing; Unity must use that port.
+3. If testing by USB, open **Tools > Serial Monitor** at **115200 baud** and
+   confirm lines like `512,509,515,520,0,0,0` change as you move the sticks.
+   Close the Serial Monitor before starting Unity.
+4. In Unity press Play. It searches available COM ports automatically. The
+   title and pause screens show the connected port. If needed, open the pause
+   menu (ESC) and press **JOYSTICK PORT** until the Bluetooth COM port appears.
+   (Player Settings > Api Compatibility Level must stay on **.NET Framework**.)
 
 The keyboard keeps working alongside the sticks.
 
@@ -144,7 +189,13 @@ Left SW        -> D2    Reset
 Right SW       -> D3    Camera
 ```
 
-Both joystick modules need `5V` and `GND`. The sketch uses `115200` baud.
+Both joystick modules need `5V` and `GND`.
+
+The USB serial output is `115200` baud. The Bluetooth module's Arduino-side
+UART is `38400` baud in this sketch and must match its configured data-mode
+speed. Unity also tries the usual `9600` factory-default speed. The PC
+Bluetooth COM port can still be selected by Unity because Bluetooth SPP
+transports the bytes wirelessly.
 
 ## GitHub
 

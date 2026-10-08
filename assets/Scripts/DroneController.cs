@@ -41,6 +41,7 @@ public sealed class DroneController : MonoBehaviour
     private bool grounded = true; // motors idle while resting on the ground
     private float lastLiftInput;
     private bool reconnectPending;
+    private float nextJoystickSearch;
 
     /// <summary>PlayerPrefs key for the joystick port chosen in the pause menu ("" = auto).</summary>
     public const string PortPref = "skybound_joystick_port";
@@ -190,6 +191,18 @@ public sealed class DroneController : MonoBehaviour
                 ReconnectJoystick();
             }
             else if (joystick == null) Debug.Log("No Arduino joystick found; using keyboard.");
+        }
+
+        // Bluetooth links drop (out of range, power); search again until it is back.
+        if (joystick != null && !joystick.Alive && joystickConnect == null)
+        {
+            Debug.Log($"Joystick on {joystick.PortName} lost; reconnecting…");
+            ReconnectJoystick();
+        }
+        else if (useJoystick && joystick == null && joystickConnect == null && Time.time >= nextJoystickSearch)
+        {
+            nextJoystickSearch = Time.time + 5f;
+            ConnectJoystick();
         }
 
         if (Input.GetKeyDown(KeyCode.R) || (joystick != null && joystick.ConsumeResetPress()))

@@ -4,15 +4,19 @@ using System.Threading;
 using UnityEngine;
 
 /// <summary>
-/// Reads the Skybound Arduino joystick (arduino/flight_joystick) over USB serial.
-/// The sketch sends "joy1_x,joy1_y,joy2_x,joy2_y,brake,camera,reset" lines at
-/// 115200 baud. Reading happens on a background thread so a slow port never
+/// Reads the Skybound Arduino joystick (arduino/flight_joystick) over USB serial
+/// or over the Bluetooth (HC-05/HC-06) virtual COM port Windows creates on pairing.
+/// The sketch sends either the legacy seven-value line or
+/// "J,leftX,leftY,rightX,rightY,leftClick,rightClick" at 9600 baud over
+/// Bluetooth or 115200 baud over USB. Reading happens on a background thread so a slow port never
 /// stalls the game; the drone polls the latest values each physics step.
 /// Requires Player Settings > Api Compatibility Level = .NET Framework.
 /// </summary>
 public sealed class ArduinoJoystick : IDisposable
 {
-    private const int BaudRate = 115200;
+    private const int UsbBaudRate = 115200;
+    private const int BluetoothBaudRate = 9600;
+    private const int ConfiguredBluetoothBaudRate = 38400;
     private const float DeadZone = 0.12f;
 
     private readonly object gate = new object();
@@ -25,6 +29,9 @@ public sealed class ArduinoJoystick : IDisposable
     private DateTime lastLine = DateTime.MinValue;
 
     public string PortName { get; private set; }
+
+    /// <summary>False once the port has failed (e.g. Bluetooth link lost); reopen to recover.</summary>
+    public bool Alive => running;
 
     /// <summary>True while fresh data has arrived in the last half second.</summary>
     public bool Connected
@@ -66,19 +73,30 @@ public sealed class ArduinoJoystick : IDisposable
         foreach (string name in candidates)
         {
             var joystick = new ArduinoJoystick();
-            if (joystick.TryStart(name)) return joystick;
+            // Try the configured HC-05 speed, then the factory-default speed,
+            // then the Uno USB speed.
+            if (joystick.TryStart(name, ConfiguredBluetoothBaudRate)) return joystick;
+            joystick.Dispose();
+
+            joystick = new ArduinoJoystick();
+            if (joystick.TryStart(name, BluetoothBaudRate)) return joystick;
+            joystick.Dispose();
+
+            joystick = new ArduinoJoystick();
+            if (joystick.TryStart(name, UsbBaudRate)) return joystick;
             joystick.Dispose();
         }
         return null;
     }
 
-    private bool TryStart(string name)
+    private bool TryStart(string name, int baudRate)
     {
         try
         {
-            port = new SerialPort(name, BaudRate) { ReadTimeout = 1500, NewLine = "\n", DtrEnable = true };
+            port = new SerialPort(name, baudRate) { ReadTimeout = 2000, WriteTimeout = 500, NewLine = "\n", DtrEnable = true };
             port.Open();
-            // The Uno resets when the port opens; wait for a valid line.
+            // USB: the Uno resets when the port opens. Bluetooth: the link takes a few
+            // seconds to come up. Either way, wait for a valid line.
             DateTime deadline = DateTime.UtcNow.AddSeconds(3);
             while (DateTime.UtcNow < deadline)
             {
@@ -111,10 +129,28 @@ public sealed class ArduinoJoystick : IDisposable
     private bool Parse(string line)
     {
         string[] parts = line.Trim().Split(',');
-        if (parts.Length < 7) return false;
         var raw = new int[7];
-        for (int i = 0; i < 7; i++)
-            if (!int.TryParse(parts[i], out raw[i])) return false;
+
+        if (parts.Length >= 7 && string.Equals(parts[0].Trim(), "J", StringComparison.OrdinalIgnoreCase))
+        {
+            // Strike Team wireless pad format:
+            // J,leftX,leftY,rightX,rightY,leftClick,rightClick
+            for (int i = 0; i < 6; i++)
+                if (!int.TryParse(parts[i + 1], out raw[i])) return false;
+            int leftClick = raw[4];
+            int rightClick = raw[5];
+            raw[4] = raw[3] > 560 ? 1 : 0; // right stick down = brake
+            raw[5] = rightClick;           // right click = camera
+            raw[6] = leftClick;            // left click = reset
+        }
+        else
+        {
+            // Legacy format:
+            // joy1_x,joy1_y,joy2_x,joy2_y,brake,camera,reset
+            if (parts.Length < 7) return false;
+            for (int i = 0; i < 7; i++)
+                if (!int.TryParse(parts[i], out raw[i])) return false;
+        }
 
         lock (gate)
         {
